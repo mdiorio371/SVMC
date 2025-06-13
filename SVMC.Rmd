@@ -1,0 +1,1102 @@
+---
+title: "f2"
+output: html_document
+date: "2024-05-22"
+editor_options: 
+  chunk_output_type: console
+---
+
+# packages
+```{r}
+library(tidyverse)
+library(data.table)
+library(Biostrings)
+library(ape)
+library(IRanges)
+#BiocManager::install("GenomicRanges")
+library(GenomicRanges)
+library(igraph)
+
+library(pbmcapply)
+library(viridis)
+library(RColorBrewer)
+```
+
+
+To get an up to date dataset
+```{r}
+
+options(timeout = 300)
+
+ncbi_url <- 
+    "ftp://ftp.ncbi.nlm.nih.gov"
+
+# Download the refseq file
+
+refseq_file <- 
+  sprintf(
+    "%s/refseq/bacteria/assembly_summary.txt",
+    ncbi_url
+    )
+
+
+refseq <- 
+    fread(
+        refseq_file, 
+        stringsAsFactors = F, 
+        quote = "",
+        select = c(1,5,6,7,8,11,12,15,16,17,18,19,20)
+    ) %>%
+  filter(
+    assembly_level =="Complete Genome",
+    version_status =="latest"
+    ) 
+
+
+# Download the taxonomy file
+taxa_file <- 
+    sprintf(
+        "%s/pub/taxonomy/new_taxdump/new_taxdump.tar.gz",
+        ncbi_url
+    )
+
+database_dir <- 
+    "../data/ncbi_db"
+        
+taxa_con <- 
+    curl_download(
+        taxa_file,
+        destfile = 
+            sprintf(
+                "%s/new_taxdump.tar.gz",
+                database_dir
+            )
+    )
+
+
+ taxonomy <- 
+      read_tsv(
+          sprintf(
+              "%s/rankedlineage.dmp",
+              database_dir
+          ), 
+          col_names = 
+              c(
+                  "taxid", "name", "s", "g", "f", "o", "c","p", "k", "d"
+              ),
+          col_types=("i-c-c-c-c-c-c-c-c-c-")
+      ) %>% 
+      filter(d=="Bacteria")
+ 
+ refseq
+ 
+ taxonomy <- 
+   readRDS("data/taxonomy.rds")
+ 
+ 
+ refseq_taxonomy <- 
+  inner_join(
+    refseq, taxonomy, by = "taxid"
+  )
+ 
+ saveRDS(
+   refseq_taxonomy,
+   "data/refseq_taxonomy.rds"
+ )
+ 
+
+```
+
+
+## inner functions
+```{r}
+
+```
+
+
+
+
+Select a bacterial species with multiple assemblies
+
+```{r}
+
+library(data.table)
+library(tidyverse)
+
+saveRDS(refseq_taxonomy, "data/refseq_taxonomy.rds")
+
+
+rm(refseq_taxonomy)
+
+ncbi_table <- 
+  readRDS(
+    "data/refseq_taxonomy.rds"
+  )
+
+species_name <- 
+  "Salmonella_enterica"
+
+  
+### prepare directories  
+
+clade_name <- 
+  filter(
+    ncbi_table, 
+    species == 
+      sub("_", " ", species_name)
+    )%>%
+  dplyr::slice(1) %>%
+  pull(phylum_clade) %>% gsub(" ", "_", .)
+
+species_variable_names <-
+    c(
+        "sync_dir", "identity_dir",
+        "oriC_dir",
+        "alignment_dir", "r_vars_dir", "results_dir", 
+        #"disparities_dir",# "c01_dir",
+        #"subset_dir",
+        #"breakpoint_dir", 
+        "prokka_dir"
+        #"breakpoint_comparisons_dir", "snp_dir",
+        #"kmer_dir", "bd_dir", "plot_dir", "roary_dir",
+        #"sync2_dir", "test_dir"
+    )
+
+species_dirs <- 
+    gsub("_dir", "", species_variable_names)
+
+for (var_name in species_variable_names){
+    dir_name <- 
+        gsub("_dir", "", var_name)
+    full_dir_name <- 
+        sprintf(
+            "processing/%s/%s/%s", 
+            dir_name, clade_name, 
+            species_name
+        )
+    
+    assign(
+        var_name, 
+        full_dir_name
+    )
+    if (!dir.exists(full_dir_name)){dir.create(full_dir_name, recursive = T)}
+}
+
+
+
+### take a sample of 200
+ncbi_table
+  
+
+
+ species_table <- 
+      ncbi_table %>%
+      filter(
+        species==sub("_", " ", species_name)
+      )
+ set.seed(123)
+ st_sample <- 
+   sample(1:nrow(species_table), size =200)
+   
+ 
+
+assembly_table <- 
+  pbmclapply(
+    1:200,
+    function(i){
+      assembly_path <- 
+        (species_table %>% pull(ftp_path))[i]
+      
+      fasta_path <- 
+        sprintf(
+          "%s/%s_genomic.fna.gz",
+          assembly_path, 
+          gsub(".*/", "", assembly_path)
+          )
+      
+      gff_path <- 
+        sprintf(
+          "%s/%s_genomic.gff.gz",
+          assembly_path,
+          gsub(".*/", "", assembly_path)
+          )
+      
+      fna_exists <- 
+              file_exists_at_url(fasta_path)
+      gff_exists <- 
+              file_exists_at_url(gff_path)
+      
+      
+      
+      dnaA_table <- 
+        dnaA_from_gff(
+          gff_path
+          )
+      if (!fna_exists | !gff_exists){
+        position_tib <- 
+          tibble( 
+            asm_name = 
+              basename(assembly_path),
+            note = "missing fasta/gff"
+                  )
+      } else {
+        position_tib <-   
+          dnaA_sync(fasta_path, dnaA_table, sync_dir)
+      }
+      
+      return(position_tib)
+    }
+      
+  ) %>%
+  bind_rows()
+
+
+
+
+## load dnaA files arranged to the OriC
+
+load_arranged_assemblies <- 
+  function(species_name, ncbi_table, sync_dir, n = 200){
+
+    
+   
+     
+    
+    
+    positions <- 
+      list()
+    #pbmclapply 
+    for (i in 1:n){
+      
+      assembly_path <- 
+        (species_table %>% pull(ftp_path))[i]
+      
+      fasta_path <- 
+        sprintf(
+          "%s/%s_genomic.fna.gz",
+          assembly_path, 
+          gsub(".*/", "", assembly_path)
+          )
+      
+      gff_path <- 
+        sprintf(
+          "%s/%s_genomic.gff.gz",
+          assembly_path,
+          gsub(".*/", "", assembly_path)
+          )
+      
+      fna_exists <- 
+              file_exists_at_url(fasta_path)
+      gff_exists <- 
+              file_exists_at_url(gff_path)
+      
+      dnaA_table <- 
+        dnaA_from_gff(
+          gff_path
+          )
+      
+      positions[[i]] <-   
+        dnaA_sync(fasta_path, dnaA_table, sync_dir)
+      print(i)
+    }
+    
+    bind_rows(positions)
+    
+}
+
+
+bind_rows(positions) %>% count(note)
+
+ncbi_table 
+```
+
+
+
+```{r}
+# Testing 20 Using 20 Genomes
+set.seed(123)
+genome_subset <- 
+  assembly_table %>%
+  sample_n(20)
+
+accessions <- 
+  genome_subset %>% pull(accession)
+```
+
+
+# Optional for 1 versus all alignment
+Find the accession with the highest similarity to all other genomes
+```{r}
+
+species_identities <- 
+    get_pairwise_identities(
+        sync_dir = sync_dir, 
+        identity_dir = 
+          sprintf("%s/ss20", identity_dir), 
+        species_table = genome_subset, 
+        species_name
+    )
+
+sampled_id_table <- 
+    id_dists %>%
+    arrange(Sequence_mean_distance)
+
+```
+
+
+## pairwise alignment
+
+Choose an alignment strategy
+All VS all
+Ref VS Qry
+One VS all
+```{r}
+
+#choose the number of genomes for each 
+
+### Pairwise alignments are generated using a pairwsie matrix
+
+All_vs_all_m <- 
+  t(combn(accessions, 2)) %>%
+  `colnames<-`(c("ref", "qry"))
+
+
+Refs_vs_Qrys <- 
+  expand_grid(
+    ref = accessions[1:round(length(accessions)/2)], 
+    qry = accessions[(round(length(accessions)/2)+1):length(accessions)]
+    )
+
+most_related <- 
+  sampled_id_table$Sequence[1]
+
+One_vs_all <- 
+  tibble(
+    ref = most_related,
+    qry = accessions[accessions != most_related]
+    ) %>% 
+  as.matrix()%>%
+  `colnames<-`(c("ref", "qry"))
+
+alignment_dir_ava <- 
+  sprintf(
+    "%s/all_vs_all", alignment_dir
+  )
+alignment_dir_rvq <- 
+  sprintf(
+    "%s/refs_vs_qrys", alignment_dir
+  )
+alignment_dir_1va <- 
+  sprintf(
+    "%s/one_vs_all", alignment_dir
+  )
+
+strategies <- list(
+  "All-vs-All" = list(
+    matrix = All_vs_all_m,
+    dir = alignment_dir_ava
+  ),
+  "Ref-vs-Query" = list(
+    matrix = Refs_vs_Qrys,
+    dir = alignment_dir_rvq
+  ),
+  "1-vs-All" = list(
+    matrix = One_vs_all,
+    dir = alignment_dir_1va
+  )
+)
+
+benchmark_results <- imap_dfr(strategies, function(info, strategy_name) {
+  benchmark_alignments(
+    genome_matrix = info$matrix,
+    delta_dir = info$dir,
+    sync_dir = sync_dir,
+    strategy_name = strategy_name,
+    mc.cores = 6
+  )
+})
+
+
+walk(strategies, ~{
+  if (!dir.exists(.x$dir)) dir.create(.x$dir, recursive = TRUE)
+})
+
+pbmclapply(
+  1:3,
+  function(i){
+    generate_nucmer_commands(
+      genome_matrix = All_vs_all_m, delta_dir = alignment_dir_ava, sync_dir
+      )[i] %>% system()
+  }, mc.cores = 6
+)
+
+
+pbmclapply(
+  1:nrow(Refs_vs_Qrys),
+  function(i){
+    generate_nucmer_commands(
+      genome_matrix = Refs_vs_Qrys, delta_dir = alignment_dir_ava, sync_dir
+      )[i] %>% system()
+  }, mc.cores = 6
+)
+
+pbmclapply(
+  1:nrow(One_vs_all),
+  function(i){
+    generate_nucmer_commands(
+      genome_matrix = One_vs_all, delta_dir = alignment_dir_ava, sync_dir
+      )[i] %>% system()
+  }, mc.cores = 6
+)
+
+benchmark_ava <- 
+  benchmark_alignments(All_vs_all_m, alignment_dir_ava, sync_dir, "All-vs-all")
+
+benchmark_rvq <- 
+  benchmark_alignments(Refs_vs_Qrys, alignment_dir_rvq, sync_dir, "Ref-vs-Query")
+benchmark_1va <- 
+  benchmark_alignments(One_vs_all, alignment_dir_1va, sync_dir, "1-vs-All")
+
+
+ generate_nucmer_commands(All_vs_all_m, alignment_dir_ava, sync_dir)
+
+ 
+ genome_matrix <- All_vs_all_m
+   delta_dir <- 
+     alignment_dir_ava
+benchmark_alignments <- 
+  function(genome_matrix, delta_dir, sync_dir, strategy_name, mc.cores = 6) {
+  
+
+  message("Starting benchmarking: ", strategy_name)
+
+  # Precompute all commands
+  cmds <- 
+    generate_nucmer_commands(genome_matrix, delta_dir, sync_dir, nuc_remove = F)
+
+  results <- 
+    pbmclapply(
+      1:nrow(genome_matrix),
+      function(i) {
+        ref <- genome_matrix[i,1]
+        qry <- genome_matrix[i,2]
+        pair_id <- paste(ref, qry, sep = "_vs_")
+        start_time <- Sys.time()
+  
+        res <- tryCatch({
+          cmd <- cmds[i]
+          exit_code <- system(cmd)
+          end_time <- Sys.time()
+          tibble(
+            strategy = strategy_name,
+            pair = pair_id,
+            ref = ref,
+            qry = qry,
+            runtime_sec = as.numeric(difftime(end_time, start_time, units = "secs")),
+            exit_code = exit_code
+          )
+        }, error = function(e) {
+          message("Error on pair: ", pair_id, " — ", e$message)
+          tibble(
+            strategy = strategy_name,
+            pair = pair_id,
+            ref = ref,
+            qry = qry,
+            runtime_sec = NA_real_,
+            exit_code = NA_integer_
+          )
+        })
+  
+        res
+    },
+    mc.cores = mc.cores
+  )
+
+  # Filter out any unexpected NULLs
+  results <- results[!sapply(results, is.null)]
+
+  # Force all elements to be tibbles
+  results <- lapply(results, function(x) {
+    if (!inherits(x, "data.frame")) {
+      tibble(
+        strategy = strategy_name,
+        pair = NA_character_,
+        ref = NA_character_,
+        qry = NA_character_,
+        runtime_sec = NA_real_,
+        exit_code = NA_integer_
+      )
+    } else {
+      x
+    }
+  })
+
+  bind_rows(results)
+}
+
+
+
+
+
+benchmark_ava <- 
+  benchmark_alignments(All_vs_all_m, alignment_dir_ava, sync_dir, "All-vs-All")
+benchmark_rxq <- 
+  benchmark_alignments(Refs_vs_Qrys, alignment_dir_ava, sync_dir, "Ref-vs-Query")
+benchmark_1va <- 
+  benchmark_alignments(One_vs_all, alignment_dir_ava, sync_dir, "1-vs-All")
+
+benchmark_rvq <- 
+  benchmark_rvq %>%
+  mutate(
+    ref = as.character(ref$ref),
+    qry = as.character(qry$qry)
+  )
+
+
+all_benchmarks <- bind_rows(benchmark_ava, benchmark_rvq, benchmark_1va)
+
+all_benchmarks %>%
+  group_by(strategy) %>%
+  summarise(
+    total_runtime_sec = sum(runtime_sec, na.rm = TRUE),
+    mean_runtime_sec = mean(runtime_sec, na.rm = TRUE),
+    sd_runtime_sec   = sd(runtime_sec, na.rm = TRUE),
+    n_pairs          = n(),
+    n_failed         = sum(is.na(runtime_sec) | exit_code != 0)
+  )
+
+
+generate_nucmer_commands(All_vs_all_m, alignment_dir_ava, sync_dir)[1:3]
+system(generate_nucmer_commands(All_vs_all_m, alignment_dir_ava, sync_dir)[1])
+
+
+
+
+ggplot(all_benchmarks, aes(x = strategy, y = runtime_sec)) +
+  geom_boxplot() +
+  labs(title = "Runtime per Pairwise Comparison", y = "Time (sec)", x = NULL)
+
+ggplot(all_benchmarks %>% group_by(strategy) %>%
+         summarise(total_runtime = sum(runtime_sec, na.rm = TRUE)),
+       aes(x = strategy, y = total_runtime)) +
+  geom_col() +
+  labs(title = "Total Runtime by Strategy", y = "Total Runtime (sec)", x = NULL)
+
+```
+
+
+
+### capturing variants
+```{r}
+
+
+alignment_dir_ava <- 
+  sprintf(
+    "%s/all_vs_all", alignment_dir
+  )
+alignment_dir_rvq <- 
+  sprintf(
+    "%s/refs_vs_qrys", alignment_dir
+  )
+alignment_dir_1va <- 
+  sprintf(
+    "%s/one_vs_all", alignment_dir
+  )
+
+deltas_ava <- 
+  All_vs_all_m %>%
+  as_tibble %>%
+    mutate(
+        expected_basename = str_c(ref, "_v_", qry, "_filtered.delta")
+    ) %>% 
+    inner_join(
+        ., 
+        tibble(
+            expected_basename =
+              basename(list.files(alignment_dir_ava, full.names = T)),
+            fullname = 
+              list.files(alignment_dir_ava, full.names = T)
+        ), 
+        by = "expected_basename"
+    ) %>%
+    mutate(
+        unfiltered_fullname = 
+            sprintf(
+                "%s/unfiltered/%s.delta",
+                alignment_dir_ava,
+                str_c(ref, "_v_", qry)
+            )
+    )
+lapply(
+  10:20,
+  function(i){
+  deltas_ava$fullname[i] %>% plot_delta
+  }
+)
+deltas_ava$fullname[19] %>% plot_delta
+
+#library(gridExtra)
+
+do.call(grid.arrange, c(lapply(
+  10:20,
+  function(i){
+  deltas_ava$fullname[i] %>% plot_delta
+  }
+), ncol = 2))
+
+all_SVs <- 
+    bind_rows(
+        all_indels %>%
+            ungroup %>%
+            transmute(
+                rid,qid, width, 
+                start, end,
+                refmid = round((start+end)/2),
+                #indel_type = variant, 
+                bin, 
+                variant_specific = variant,
+                variant = "Indel",
+                species, idx
+            ),
+        all_dups %>%
+            transmute(
+                rid = ref_name, 
+                qid = qry_name,
+                width = dup_len,
+                start = dup_s, end = dup_e,
+                refmid = round((start+end)/2),
+                bin, 
+                variant_specific = 
+                    ifelse(
+                        duplication_type =="tandem",
+                        duplication_type,
+                        paste(
+                            duplication_type, domains, sep = " "
+                        )
+                    ),
+                variant = "Duplication",
+                species , idx
+            ),
+        all_tlocs %>%
+            ungroup %>%
+            transmute(
+                rid, qid, 
+                width,
+                start, end,
+                refmid,
+                bin, variant,
+                variant_specific =
+                    replichores,
+                species, idx
+            ),
+        substruct_invs %>%
+            ungroup() %>%
+            transmute(
+                rid, qid, 
+                width = meanlen,
+                start = rs, end = re, 
+                refmid = round((rs+re)/2),
+                bin, 
+                variant_specific = 
+                    variant,
+                variant = "Inversion",
+                species, idx
+            )
+    ) 
+
+
+delta_file <- 
+  deltas_ava$fullname[19]
+
+unfiltered_delta_file <- 
+  deltas_ava$unfiltered_fullname[19]
+
+delta_all_SVs <- 
+  function(delta_file, unfiltered_delta_file){
+    
+    ### indels
+    delta_indels_i <- 
+      delta_indels(delta_i) %>%
+      transmute(
+          rid,qid, width, 
+          start, end,
+          refmid = round((start+end)/2),
+          #indel_type = variant, 
+          variant_specific = variant,
+          variant = "Indel",
+          species = species_name
+      )
+    if (nrow(delta_indels_i)==0){
+      delta_indels_i <- 
+        tibble(
+          rid = delta_file$ref[i],
+          qid = delta_file$qry[i],
+          idx = 0
+        )
+    }
+    ## duplications
+    delta_dups_i <- 
+      delta_duplications(
+        delta_table = delta_file, 
+        unfiltered_delta_table = unfiltered_delta_file
+                ) 
+    
+    ## translocations
+    
+    delta_tlocs_i <- 
+      delta_translocations(delta_file) %>%
+      transmute(
+        rid, qid, 
+        width,
+        start, end,
+        refmid,
+        variant,
+        variant_specific =
+          replichores,
+        species = species_name
+            )
+    
+    delta_SR_temp <- 
+      delta_structural_rearrangements(delta_file)
+    
+    delta_subSR_i <- 
+      delta_substructural_inversions(delta_file, delta_SR_temp) %>%
+      ungroup() %>%
+            transmute(
+                rid, qid, 
+                width = meanlen,
+                start = rs, end = re, 
+                refmid = round((rs+re)/2),
+                variant_specific = 
+                    variant,
+                variant = "Inversion",
+                species= species_name
+            )
+    
+    delta_subSR_i %>% arrange(desc(width))
+    
+    delta_SR_i <- 
+      delta_SR_temp %>%
+      transmute(
+        rid, qid, 
+        width,
+        start = rs, 
+        end = re,
+        refmid = round((rs+re)/2),
+        variant = "Sructural rearrangement",
+        variant_specific,
+        species = species_name
+            )
+    
+                
+    
+  }
+
+
+
+
+all_indels <- 
+    pbmclapply(
+        1:nrow(deltas_ava),
+        function(i){
+            #for (i in 1:nrow(df_tib)){
+            row_i <- 
+                deltas_ava[i,]
+            delta_i <- 
+                row_i %>%
+                pull(fullname)
+            delta_indels_i <- 
+                delta_indels(delta_i) %>%
+                mutate(idx = i)
+            
+            if (nrow(delta_indels_i)==0){
+                delta_indels_i <- 
+                    tibble(
+                        rid = deltas_ava$ref[i],
+                        qid = deltas_ava$qry[i],
+                        idx = i
+                    )
+                
+            }
+            return(delta_indels_i)
+        }
+    ) %>% 
+    bind_rows %>%
+    mutate(
+        bin = 
+            cut(
+                width, 
+                breaks = 
+                    c(
+                        50, 500, 1000, 
+                        2000, 10000, Inf
+                    ), 
+                right = FALSE),
+        species = species_name
+    ) %>%
+    rowwise() %>%
+    mutate(rq = paste(rid, qid, sep ="_")) %>%
+    group_by(bin, rq) %>%
+    mutate(
+        SV_count = n()
+    )
+
+
+all_dups <- 
+    pbmclapply(
+        1:nrow(df_tib),
+        function(i){
+            #for (i in 1:nrow(df_tib)){
+            row_i <- 
+                df_tib[i,]
+            delta_i <- 
+                row_i %>%
+                pull(fullname)
+            
+            ufd_i <- 
+                row_i %>%
+                pull(unfiltered_fullname)
+            
+            delta_dups_i <- 
+                delta_duplications(
+                    delta_table = delta_i, 
+                    unfiltered_delta_table = ufd_i
+                ) 
+            
+            dd_check <- 
+                ncol(delta_dups_i)
+            
+            delta_dups_i <- 
+                delta_dups_i %>%
+                mutate(
+                    nr = 
+                        ifelse(
+                            dd_check==2,
+                            0,
+                            n()
+                        ),
+                    idx = i
+                )
+            
+            if (nrow(delta_dups_i)==0){
+                delta_dups_i <- 
+                    tibble(
+                        rid = df_tib$ref[i],
+                        qid = df_tib$qry[i],
+                        idx = i
+                    )
+                
+               # print(i)}
+                
+            }
+            return(delta_dups_i)
+        }, mc.cores = 4
+    ) %>% 
+    bind_rows %>%
+    mutate(
+        bin = 
+            cut(
+                dup_len, 
+                breaks = 
+                    c(
+                        50, 500, 1000, 
+                        2000, 10000, Inf
+                    ), 
+                right = FALSE),
+        species = species_name
+    ) 
+
+
+
+
+
+deltas_rvq
+
+
+
+deltas_1va
+
+```
+
+
+## get all delta_files
+
+
+### Arrange and align wrapper
+```{r}
+
+species_table
+
+assembly_table
+
+
+the_rest <- 
+  species_table %>%
+  filter(
+    !(basename(ftp_path) %in% assembly_table$asm_name)
+  )
+  
+ap_i <- 
+  the_rest$ftp_path[1]
+
+
+assembly_path <- 
+  ap_i
+
+ref_path <- 
+  sprintf(
+    "%s/%s.txt",
+    sync_dir, most_related
+  )
+
+alignment_dir_the_rest <- 
+  sprintf(
+    "%s/1v_the_rest",
+    alignment_dir
+  )
+sync_dir_the_rest <- 
+  sprintf(
+    "%s/1v_the_rest",
+    sync_dir
+  )
+
+if (!dir.exists(alignment_dir_the_rest)){dir.create(alignment_dir_the_rest)}
+
+if (!dir.exists(sync_dir_the_rest)){dir.create(sync_dir_the_rest)}
+
+sync_dir
+most_related
+
+al_list <- 
+  list()
+
+al_list_head <- 
+  bind_rows(al_list)
+
+al_list_tail <- 
+  pbmclapply(
+    622:nrow(the_rest),
+    function(i){
+      assembly_path <- 
+      the_rest$ftp_path[i]
+    out_tib <- 
+      arrange_align(
+        assembly_path, 
+        ref_path,
+        alignment_dir_the_rest,
+        sync_dir_the_rest
+      )
+      return(out_tib)
+    },
+    mc.cores = 4
+  )
+
+ori_positions_tib <- 
+  bind_rows(
+    al_list_head,
+    bind_rows(al_list_tail)
+  )
+
+
+
+pb <- txtProgressBar(min = 431, max = nrow(the_rest), style = 3)
+for (i in 431:nrow(the_rest)){
+  assembly_path <- 
+    the_rest$ftp_path[i]
+  al_list[[i]] <- 
+    arrange_align(
+      assembly_path, 
+      ref_path,
+      alignment_dir_the_rest,
+      sync_dir_the_rest
+    )
+  setTxtProgressBar(pb, i)
+}
+close(pb)
+
+
+arrange_align <- 
+  function(
+    assembly_path,
+    ref_path,
+    alignment_dir_the_rest,
+    sync_dir_the_rest
+  ){
+    
+      fasta_path <- 
+        sprintf(
+          "%s/%s_genomic.fna.gz",
+          assembly_path, 
+          gsub(".*/", "", assembly_path)
+          )
+      
+      gff_path <- 
+        sprintf(
+          "%s/%s_genomic.gff.gz",
+          assembly_path,
+          gsub(".*/", "", assembly_path)
+          )
+      
+      fna_exists <- 
+              file_exists_at_url(fasta_path)
+      gff_exists <- 
+              file_exists_at_url(gff_path)
+      
+      dnaA_table <- 
+        dnaA_from_gff(
+          gff_path
+          )
+      if (!fna_exists | !gff_exists){
+        position_tib <- 
+          tibble( 
+            asm_name = 
+              basename(assembly_path),
+            note = "missing fasta/gff"
+                  )
+      } else {
+        position_tib <-   
+          dnaA_sync(fasta_path, dnaA_table, sync_dir_the_rest)
+      }
+      
+      
+      ## align to the ref
+      simple_nucmer(
+        ref = ref_path, 
+        qry = position_tib$out_file,
+        output = 
+          sprintf(
+            "%s_v_%s",
+            sub(".txt", "", basename(ref_path)), 
+            sub(".txt", "", basename(position_tib$out_file))
+          ),
+        alignment_dir = alignment_dir_the_rest
+      ) %>% system()
+      
+      
+      out_tib <- 
+        position_tib 
+      
+      file.remove(position_tib$out_file)
+      
+      return(position_tib)
+  }
+
+system("nucmer --mum --maxgap=500 --mincluster=100 --prefix=NZ_CP148880.1_v_NZ_CP030207.1 processing/sync/Gamma/Salmonella_enterica/NZ_CP148880.1.txt processing/sync/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP030207.1.txt")
+
+readDNAStringSet("processing/sync/Gamma/Salmonella_enterica/NZ_CP148880.1.txt")
+
+all_delta_files <- 
+  list.files(
+    sprintf("%s")
+    alignment_dir
+    )
+
+
+```
+
+
+
+
+
+
+
