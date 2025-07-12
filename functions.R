@@ -441,20 +441,23 @@ mash_commands <-
 
 get_pairwise_identities <- 
   function(
-    sync_dir, identity_dir, species_table,
-    species_name
+    sync_dir, id_dir, species_table,
+    species_name, clust_method = "complete"
   ){
+    
+    mash_file <- 
+      sprintf(
+        "%s/%s_mash.txt", 
+        id_dir, species_name
+      )
     # run mash if it hasn't been run
     if (!
         file.exists(
-          sprintf(
-            "%s/%s_mash.txt", 
-            identity_dir, species_name
-          )
+          mash_file
         )
     ){
       mash_bash <- 
-        mash_commands(species_name, identity_dir, sync_dir)
+        mash_commands(species_name, id_dir, sync_dir)
       system(mash_bash[1], ignore.stderr = T)
       system(mash_bash[2])
     }
@@ -462,10 +465,7 @@ get_pairwise_identities <-
     
     id_table <-
       fread(
-        sprintf(
-          "%s/%s_%s.txt", 
-          identity_dir, species_name, filetype
-        ),# stringsAsFactors = F, 
+        mash_file,
         select = c(1:3)
       ) %>%
       mutate(V1 = sub(".txt", "", basename(V1))) %>%
@@ -807,7 +807,7 @@ filter_delta <- function(delta_table,
     # 4) drop any tiny contigs
     
 }
-filter_delta(delta_table) %>% plot_delta
+#filter_delta(delta_table) %>% plot_delta
 
 filter_delta <- 
   function(
@@ -1299,7 +1299,19 @@ delta_duplications <-
       return(
         tibble(
           ref_name = delta_table$rid[1],
-          qry_name = delta_table$qid[1]
+          qry_name = delta_table$qid[1],
+          dup_s = NA_integer_,
+          dup_e = NA_integer_,
+          orig_ref_start = NA_integer_,
+          orig_ref_end = NA_integer_,
+          dup_ref_start = NA_integer_,
+          dup_ref_end = NA_integer_,
+          dup_len = NA_integer_,
+          dup_gap = NA_integer_,
+          domains = NA_character_,
+          duplication_type = NA_character_,
+          collapsed = 0,
+          duplication_found = FALSE
         )
       )
     } else {
@@ -1385,9 +1397,22 @@ delta_duplications <-
         return(
           tibble(
             ref_name = delta_table$rid[1],
-            qry_name = delta_table$qid[1]
+            qry_name = delta_table$qid[1],
+            dup_s = NA_integer_,
+            dup_e = NA_integer_,
+            orig_ref_start = NA_integer_,
+            orig_ref_end = NA_integer_,
+            dup_ref_start = NA_integer_,
+            dup_ref_end = NA_integer_,
+            dup_len = NA_integer_,
+            dup_gap = NA_integer_,
+            domains = NA_character_,
+            duplication_type = NA_character_,
+            collapsed = 0,
+            duplication_found = FALSE
           )
         )
+        
       } else {
         edges <- common %>%
           filter(queryHits < subjectHits) %>%
@@ -1507,93 +1532,223 @@ delta_translocations <-
 
 
 
-delta_structural_rearrangements <- 
-  function(delta_table) {
-  # --- your existing filtering & rowwise min/max --------------------------
-    fd <- delta_table %>%
-      filter_delta() %>%             # your pipeline up through `fd`
-      rowwise() %>%
-      mutate(
-        qs2 = min(qs, qe),
-        qe2 = max(qs, qe)
-      ) %>%
-      ungroup()
-    
-    # --- annotate a simple row index so we can refer back by position ----------
-    fd2 <- fd %>%
-      arrange(rs) %>%
-      mutate(idx = row_number())
-    
-    nested_idx <- fd2 %>%
-      filter(strand == "+" &
-               lag(strand, default = NA) == "-" &
-               lead(strand, default = NA) == "-") %>%
-      pull(idx)
-    # should be “4” in your example
-    
-    # 2) bracketers: the minus‐strand just before/after that nested piece
-    outer_above <- max(fd2$idx[fd2$strand == "-" & fd2$idx < nested_idx], na.rm = TRUE)
-    outer_below <- min(fd2$idx[fd2$strand == "-" & fd2$idx > nested_idx], na.rm = TRUE)
-    outer_idx   <- c(outer_above, outer_below)  # should be c(2,5)
-    
-    # 3) any other minus strand is a localized inversion
-    localized_idx <- fd2$idx[fd2$strand == "-" & !(fd2$idx %in% outer_idx)]
-    
-    # 4) build one‐row summary for each event
-    events <- 
-      bind_rows(
-      # localized
-      fd2 %>% 
-        filter(idx %in% localized_idx) %>%
-        summarise(
-          variant_specific      = "localized",
-          rs         = min(rs),
-          re         = max(re),
-          qs         = min(qs2),
-          qe         = max(qe2),
-          contigs    = paste(new_contigs, collapse = ","),
-          strand= unique(strand),
-          X_dist = mean(X_dist),
-          width = (re-rs+1),
-          rid = unique(rid),
-          qid = unique(qid)
-        ),
-      # outer
-      fd2 %>% filter(idx %in% outer_idx) %>%
-        summarise(
-          variant_specific      = "outer",
-          rs         = min(rs),
-          re         = max(re),
-          qs         = min(qs2),
-          qe         = max(qe2),
-          contigs    = paste(new_contigs, collapse = ","),
-          strand= unique(strand),
-          X_dist = mean(X_dist),
-          width = (re-rs+1),
-          rid = unique(rid),
-          qid = unique(qid)
-        ),
-      # nested
-      fd2 %>% filter(idx == nested_idx) %>%
-        summarise(
-          variant_specific      = "nested",
-          rs         = rs,
-          re         = re,
-          qs         = qs2,
-          qe         = qe2,
-          contigs    = paste(new_contigs, collapse = ","),
-          strand=unique(strand),
-          X_dist = mean(X_dist),
-          width = (re-rs+1),
-          rid = unique(rid),
-          qid = unique(qid)
-        )
+delta_structural_rearrangements_prev <- function(delta_table) {
+  if (is.character(delta_table)) {
+    delta_table <- read_delta(delta_table)
+  }
+  # Your pipeline up through fd2
+  fd <- delta_table %>%
+    filter_delta() %>%
+    rowwise() %>%
+    mutate(
+      qs2 = min(qs, qe),
+      qe2 = max(qs, qe)
+    ) %>%
+    ungroup()
+  
+  fd2 <- fd %>%
+    arrange(rs) %>%
+    mutate(idx = row_number())
+  
+  # Check: If there is only a single contig and it spans the full genome, return "no SV" row
+  if (nrow(fd2) == 1) {
+    return(
+      tibble(
+        variant_specific = "none",
+        rs      = fd2$rs[1],
+        re      = fd2$re[1],
+        qs      = fd2$qs2[1],
+        qe      = fd2$qe2[1],
+        contigs = as.character(fd2$new_contigs[1]),
+        strand  = fd2$strand[1],
+        X_dist  = fd2$X_dist[1],
+        width   = fd2$re[1] - fd2$rs[1] + 1,
+        rid     = fd2$rid[1],
+        qid     = fd2$qid[1]
+      )
     )
-    
-    return(events)
+  }
+  
+  # Continue as before for real events
+  nested_idx <- 
+    fd2 %>%
+    filter(strand == "+" &
+             lag(strand, default = NA) == "-" &
+             lead(strand, default = NA) == "-") %>%
+    pull(idx)
+  
+  outer_above <- max(fd2$idx[fd2$strand == "-" & fd2$idx < nested_idx], na.rm = TRUE)
+  outer_below <- min(fd2$idx[fd2$strand == "-" & fd2$idx > nested_idx], na.rm = TRUE)
+  outer_idx   <- c(outer_above, outer_below)
+  
+  localized_idx <- fd2$idx[fd2$strand == "-" & !(fd2$idx %in% outer_idx)]
+  
+  events <- bind_rows(
+    # localized
+    fd2 %>% 
+      filter(idx %in% localized_idx) %>%
+      summarise(
+        variant_specific = "localized",
+        rs      = min(rs),
+        re      = max(re),
+        qs      = min(qs2),
+        qe      = max(qe2),
+        contigs = paste(new_contigs, collapse = ","),
+        strand  = unique(strand),
+        X_dist  = mean(X_dist),
+        width   = (re - rs + 1),
+        rid     = unique(rid),
+        qid     = unique(qid)
+      ),
+    # outer
+    fd2 %>% filter(idx %in% outer_idx) %>%
+      summarise(
+        variant_specific = "outer",
+        rs      = min(rs),
+        re      = max(re),
+        qs      = min(qs2),
+        qe      = max(qe2),
+        contigs = paste(new_contigs, collapse = ","),
+        strand  = unique(strand),
+        X_dist  = mean(X_dist),
+        width   = (re - rs + 1),
+        rid     = unique(rid),
+        qid     = unique(qid)
+      ),
+    # nested
+    fd2 %>% filter(idx == nested_idx) %>%
+      summarise(
+        variant_specific = "nested",
+        rs      = rs,
+        re      = re,
+        qs      = qs2,
+        qe      = qe2,
+        contigs = paste(new_contigs, collapse = ","),
+        strand  = unique(strand),
+        X_dist  = mean(X_dist),
+        width   = (re - rs + 1),
+        rid     = unique(rid),
+        qid     = unique(qid)
+      )
+  )
+  
+  # If still no events found (e.g. all above return 0-row), return "none"
+  if (nrow(events) == 0) {
+    return(
+      tibble(
+        variant_specific = "none",
+        rs      = fd2$rs[1],
+        re      = fd2$re[1],
+        qs      = fd2$qs2[1],
+        qe      = fd2$qe2[1],
+        contigs = as.character(fd2$new_contigs[1]),
+        strand  = fd2$strand[1],
+        X_dist  = fd2$X_dist[1],
+        width   = fd2$re[1] - fd2$rs[1] + 1,
+        rid     = fd2$rid[1],
+        qid     = fd2$qid[1]
+      )
+    )
+  }
+  
+  return(events)
 }
 
-events$contigs
+
+delta_structural_rearrangements <- 
+  function(delta_table, localized_threshold = 1e6) {
+  if (is.character(delta_table)) {
+    delta_table <- read_delta(delta_table)
+  }
+  fd <- delta_table %>%
+    filter_delta() %>%
+    rowwise() %>%
+    mutate(
+      qs2 = min(qs, qe),
+      qe2 = max(qs, qe)
+    ) %>%
+    ungroup()
+  
+  fd2 <- fd %>%
+    arrange(rs) %>%
+    mutate(idx = row_number())
+  
+  # Find all inversion indices (strand == "-")
+  inv_idx <- fd2$idx[fd2$strand == "-"]
+  
+  # Classify as localized or symmetric based on X_dist
+  localized_idx <- fd2$idx[fd2$strand == "-" & fd2$X_dist > localized_threshold]
+  symmetric_idx <- fd2$idx[fd2$strand == "-" & fd2$X_dist <= localized_threshold]
+  
+  events <- list()
+  
+  # Localized inversion(s)
+  if (length(localized_idx) > 0) {
+    events$localized <- fd2 %>%
+      filter(idx %in% localized_idx) %>%
+      summarise(
+        variant_specific = "localized",
+        rs      = min(rs),
+        re      = max(re),
+        qs      = min(qs2),
+        qe      = max(qe2),
+        contigs = paste(new_contigs, collapse = ","),
+        strand  = unique(strand),
+        X_dist  = mean(X_dist),
+        width   = (re - rs + 1),
+        rid     = unique(rid),
+        qid     = unique(qid)
+      )
+  }
+  
+  # Symmetric inversion(s)
+  if (length(symmetric_idx) > 0) {
+    events$symmetric <- fd2 %>%
+      filter(idx %in% symmetric_idx) %>%
+      summarise(
+        variant_specific = "symmetric",
+        rs      = min(rs),
+        re      = max(re),
+        qs      = min(qs2),
+        qe      = max(qe2),
+        contigs = paste(new_contigs, collapse = ","),
+        strand  = unique(strand),
+        X_dist  = mean(X_dist),
+        width   = (re - rs + 1),
+        rid     = unique(rid),
+        qid     = unique(qid)
+      )
+  }
+  
+  # Optionally add other event types here (nested, outer, etc.) if you wish
+  
+  events_df <- bind_rows(events)
+  
+  # If nothing found, return "none"
+  if (nrow(events_df) == 0) {
+    return(
+      tibble(
+        variant_specific = "none",
+        rs      = fd2$rs[1],
+        re      = fd2$re[1],
+        qs      = fd2$qs2[1],
+        qe      = fd2$qe2[1],
+        contigs = as.character(fd2$new_contigs[1]),
+        strand  = fd2$strand[1],
+        X_dist  = fd2$X_dist[1],
+        width   = fd2$re[1] - fd2$rs[1] + 1,
+        rid     = fd2$rid[1],
+        qid     = fd2$qid[1]
+      )
+    )
+  }
+  return(events_df)
+}
+
+
+
+
+#events$contigs
 
 
 
