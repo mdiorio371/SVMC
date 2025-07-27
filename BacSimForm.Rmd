@@ -1,0 +1,2053 @@
+---
+title: "Bacterial variation in sequence and structure"
+output: html_document
+---
+
+
+Path setup
+```{r}
+current_path <- 
+  system("echo $PATH", intern = T)
+#Sys.setenv(RETICULATE_PYTHON = "//anaconda3/bin/python3")
+
+Sys.setenv(
+  PATH = paste( "/opt/anaconda3/bin/", current_path, sep = ":")
+  )
+/opt/anaconda3/bin
+
+# system("echo $PATH", intern = T)
+# 
+# system("which python3")
+```
+
+
+Load the full table, save it as an rds table or load the predownloaded dataset from github.
+```{r}
+# Loading the package
+source("BSPN.R", verbose = F)
+
+database_dir <- 
+    "../data/ncbi_db"
+
+ncbi_table_list <- 
+  get_ncbi_table(db_dir = database_dir) 
+
+#saveRDS(ncbi_table_list2, sprintf("%s/ncbi_table_list.rds", database_dir))
+ncbi_table_list <- readRDS(sprintf("%s/ncbi_table_list.rds", database_dir))
+ncbi_table <- ncbi_table_list$ncbi_table
+```
+
+## choose a single species
+
+```{r}
+ncbi_table_list$ncbi_cc %>% 
+    arrange(desc(spec_count))
+species_name <-
+    "Salmonella_enterica"
+    "Klebsiella_pneumoniae"
+    "Mycobacterium_tuberculosis"
+    "Bordetella_parapertussis"
+    #"Leptospira_interrogans"
+    
+#for (i in 1:3){
+species_name <- 
+    "Salmonella_enterica"
+    (ncbi_table_list$ncbi_cc %>% 
+    arrange(desc(spec_count)) %>% pull(species_))[i]
+## set up directories for this species
+genus_name <- 
+  strsplit(species_name, "_")[[1]][1]
+
+clade_name <- 
+  filter(ncbi_table_list$ncbi_cc, species_==species_name) %>%
+  pull(phylum) %>% gsub(" ", "_", .)
+
+species_variable_names <-
+  c(
+      "fna_dir",
+      "sync_dir", "gff_dir", "identity_dir", "mummer_dir",
+      "delta_dir", "r_vars_dir", "results_dir", 
+      "repeats_dir", "invs_dir",
+      "disparities_dir",
+      "breakpoint_dir", "prokka_dir",
+      "breakpoint_comparisons_dir",
+      "kmer_dir", "bd_dir", "plot_dir"
+  )
+
+species_dirs <- 
+  gsub("_dir", "", species_variable_names)
+
+for (var_name in species_variable_names){
+  dir_name <- 
+    gsub("_dir", "", var_name)
+  full_dir_name <- 
+    sprintf(
+        "../data/processing/%s/%s/%s/%s", 
+        dir_name, clade_name, 
+        genus_name, species_name
+        )
+  
+  assign(
+    var_name, 
+    full_dir_name
+  )
+  if (!dir.exists(full_dir_name)){dir.create(full_dir_name, recursive = T)}
+}
+
+species_summary <- 
+    get_species_summary(species_name, ncbi_table_list$ncbi_table) 
+#species_summary[1723,]
+
+saveRDS(
+    species_summary,
+    sprintf(
+        "%s/species_summary.rds",
+        r_vars_dir
+    )
+)
+species_summary <- 
+    readRDS(
+        sprintf(
+            "%s/species_summary.rds",
+            r_vars_dir
+        )
+    )
+
+# species_summary <- 
+#     species_summary %>% filter(!is.na(ftp_path))
+# species_summary %>% pull(accession) %>% unique %>% length 
+
+set.seed(123)
+st_subsampled <- 
+    species_summary %>%
+    sample_n(., 200) 
+
+species_table <- st_subsampled
+
+species_table %>% distinct(taxid, .keep_all = T) 
+
+#suppressMessages(synchronize(species_table, sync_dir, gff_dir))
+subset_sync_dir <- 
+    sprintf("%s/subset", sync_dir)
+
+if (!dir.exists(subset_sync_dir)){dir.create(subset_sync_dir)}
+
+sync_report <- 
+    synchronize(
+        species_table, 
+        subset_sync_dir,
+        gff_dir
+        )
+
+accession_list <-
+    list.files(subset_sync_dir) %>%
+    sub(".txt", "", .)
+
+sprintf(
+        "%i out of %i sequences synchronized",
+        length(list.files(subset_sync_dir)), nrow(species_summary)
+    )
+#comp_matrix <- 
+    # t(combn(accession_list, 2)) %>%
+    # `colnames<-`(c("ref", "qry")) %>%
+    # as_tibble() 
+species_identities <- 
+        get_pairwise_identities(
+            sync_dir, 
+            identity_dir, st_subsampled, 
+            genus_name, species_name
+            )
+
+
+species_identities <- 
+        get_pairwise_identities(
+            subset_sync_dir, 
+            identity_dir, st_subsampled, 
+            genus_name, species_name
+            )
+
+accession_list_200 <- 
+    accession_list[accession_list %in% st_subsampled$accession]
+
+## filtering: taking species with above 95% similarity
+species_identities$mash_tib %>% arrange(identity)
+species_identities$id_dists
+#species_identities$mash_plot
+list.files(sync_dir)
+
+full_id_table <- 
+    species_identities$id_dists
+sampled_id_table <- 
+    species_identities$id_dists %>%
+    arrange(desc(Sequence_mean_distance)) %>%
+    filter(Sequence_mean_distance<5) 
+    #sample_n(., 40) 
+
+
+sid2 <- 
+    species_identities$mash_tib %>%
+    filter(
+        ref %in% sampled_id_table$Sequence,
+        qry %in% sampled_id_table$Sequence
+    )
+        
+accession_list_200 <- 
+    accession_list[accession_list %in% sampled_id_table$Sequence]
+
+
+# id_combo <- 
+#     bind_rows(
+#         (full_id_table %>% mutate(Dataset = "Complete")),
+#         (sampled_id_table %>% mutate(Dataset = "subsampled"))
+#     ) %>% filter(Difference_from_Mean<5)
+
+
+comp_matrix <- 
+    t(combn(accession_list_200, 2)) %>%
+    `colnames<-`(c("ref", "qry")) %>%
+    as_tibble()
+
+
+# calculate disparities
+lapply(
+    1:length(accession_list_200),
+    function(i){
+        nuc_disparities <- 
+            sprintf(
+                "python3 nucleotide_disparities.py %s/%s.txt %s/%s.csv",
+                sync_dir, 
+                sampled_accession_list[i],
+                disparities_dir, 
+                sampled_accession_list[i]
+            )
+        system(nuc_disparities)
+        print(i)
+    }
+)
+
+sampled_disparity_tables <- 
+    lapply(
+        1:length(list.files(disparities_dir)),
+        function(i){
+            nt_tib <- 
+                fread(
+                    sprintf(
+                        "%s/%s.csv",
+                        disparities_dir, 
+                        sampled_accession_list[i]
+                    )
+                ) %>%
+                 filter(row_number() %% 10 == 0) %>%
+                gather(value = "value") %>%
+                group_by(key) %>% 
+                mutate(position = row_number()) %>% 
+                mutate(
+                    accession = sampled_accession_list[i],
+                    accession_key = 
+                        paste(accession, key, sep = "_")
+                    )
+        }
+    ) %>% 
+    bind_rows()
+
+sampled_disparity_tables %>% pull(accession) %>% unique
+ggplot(
+    data=sampled_disparity_tables,
+    aes(x = position, y=value,colour=accession_key)
+    ) +
+  geom_line()+ theme(legend.position = "none")
+  #geom_point() +
+    #scale_color_brewer(palette="Dark2")
+
+nt_tib <- 
+    fread(
+        sprintf(
+            "%s/%s.csv",
+            disparities_dir, 
+            "NZ_CP051329.1"
+            #sampled_accession_list[1]
+        )
+    ) %>%
+    gather(value = "value") %>%
+    group_by(key) %>% 
+    mutate(position = row_number())
+
+
+
+list.files(
+    sync_dir, pattern = "NC_022525.1",# sampled_accession_list[1], 
+    full.names = T
+    )
+ggplot(data=nt_tib, aes(x = position, y=value, colour=accession, group = key)) +
+  geom_line()+
+  #geom_point() +
+    scale_color_brewer(palette="Dark2")
+
+
+
+bd_cors2 <- 
+    pbmclapply(
+        1:nrow(comp_matrix),
+        function(i){
+            ref_i <- 
+                as.character(comp_matrix[i,1])
+            qry_i <- 
+                as.character(comp_matrix[i,2])
+            ref_bd <- 
+                sprintf(
+                    "%s/%s.csv",
+                    disparities_dir,
+                    ref_i
+                ) %>% 
+                fread()
+            qry_bd <- 
+                sprintf(
+                    "%s/%s.csv",
+                    disparities_dir,
+                    qry_i
+                ) %>%
+                fread()
+            
+            if (nrow(ref_bd)>nrow(qry_bd)){
+                ld <- 
+                    nrow(ref_bd)-nrow(qry_bd)
+                ref_bd <- 
+                    ref_bd[
+                        -c(
+                            (nrow(ref_bd)-(ld-1)):
+                                nrow(ref_bd)),
+                        ]
+                
+            }
+            if (nrow(qry_bd)>nrow(ref_bd)){
+                ld <- 
+                    nrow(qry_bd)-nrow(ref_bd)
+                qry_bd <- 
+                    qry_bd[
+                        -c(
+                            (nrow(qry_bd)-(ld-1)):
+                                nrow(qry_bd)),
+                        ]
+                
+            }
+    
+            GC_cor <- 
+                cor(
+                    ref_bd$`G-C`,
+                    qry_bd$`G-C`, 
+                    method = "spearman"
+                )
+            AT_cor <- 
+                cor(
+                    ref_bd$`A-T`,
+                    qry_bd$`A-T`, 
+                    method = "spearman"
+                )
+            
+            out_tib <- 
+                tibble(
+                    ref = 
+                        ref_i,
+                    qry = 
+                        qry_i,
+                    GC_dist = 
+                        1-GC_cor,
+                    AT_dist = 
+                        1-AT_cor
+                )
+            
+        }
+    ) %>%
+    bind_rows()
+
+bd_cors2 %>% arrange(desc(AT_dist))
+
+## cluster networking
+
+most_related <- 
+    sampled_id_table %>%
+    arrange(Sequence_mean_distance) %>%
+    dplyr::slice(1) %>% 
+    pull(Sequence)
+# accession_list <-
+#     list.files(sync_dir) %>%
+#     sub(".txt", "", .)
+delta_dir_200 <- 
+    sprintf("%s/200", delta_dir)
+if (dir.exists(delta_dir_200)){dir.create(delta_dir_200)}
+
+mummer_commands <- 
+    mummer_ref_v_all(
+        most_related, accession_list_200,
+        delta_dir =  delta_dir_200, 
+        sync_dir = subset_sync_dir
+        )
+
+minimum_alignment_percentage <- 
+    90
+minimum_inversion_length <- 
+    5e4
+filtered_combined_delta <- 
+    filter_combined_delta(
+        sprintf("%s/ref_v_all", delta_dir_200), 
+        minimum_alignment_percentage, 
+        minimum_inversion_length
+    )
+
+## Clustering 
+clustered_genomes_list <- 
+    cluster_genomes(filtered_combined_delta)
+
+clustered_genomes <- 
+   clustered_genomes_list$cluster_summary %>%
+    left_join(
+        ., 
+        species_table[,c("accession", "len")] %>% 
+            `colnames<-`(c("accessions", "len")),
+        by = "accessions"
+        )
+
+clustered_genomes_list$cluster_summary %>% pull(accessions)
+
+species_table[,c("accession", "len")] %>% 
+            `colnames<-`(c("accessions", "len")) %>% pull(accessions)
+    
+cluster_counts <- 
+    clustered_genomes %>% 
+    group_by(cluster_id) %>% 
+    summarise(
+        grouped_sequences = unique(grouped_sequences),
+        inversions = unique(inversions)
+        )
+cluster_counts
+clustered_genomes
+write_csv(
+    clustered_genomes,
+    sprintf(
+        "%s/clustered_genomes.csv",
+        results_dir
+    )
+    )
+
+
+clust_identity_list <- 
+    cluster_with_identity(clustered_genomes, sid2)
+
+cluster_representatives <- 
+    clust_identity_list$clust_identity %>% 
+    filter(
+        ref_clust!=qry_clust,
+        ref==most_related
+        ) %>%
+    arrange(qry_clust) %>% 
+    group_by(ref_clust, qry_clust) %>%
+    filter(
+        identity ==max(identity)
+        ) %>% ungroup
+
+
+clustered_genomes
+
+
+delta_plots <- 
+    lapply(
+        1:15,#nrow(cluster_representatives),
+        function(i){
+            filtered_combined_delta %>% 
+                ungroup %>% 
+                filter(qid==pull(cluster_representatives, qry)[i]) %>% 
+                plot_delta(
+                    ., 
+                    xlb = "Cluster 0",
+                    ylb = 
+                        sprintf(
+                            "Cluster %i",
+                            pull(cluster_representatives, qry_clust)[i] %>%
+                                as.character() %>% 
+                                as.numeric()
+                                )
+                    )
+            }
+    )
+
+ do.call(
+     "grid.arrange", 
+     c(
+         delta_plots,
+         ncol=5
+         )
+     )
+ rm(delta_plots)
+
+
+cluster_identity <- 
+    cluster_with_identity(
+        clustered_genomes, 
+        species_identities$mash_tib
+        )
+potential_adjacents <- 
+    get_potential_adjacents(
+        cluster_identity$clust_identity_diff
+    )
+
+
+mummer_commands <- 
+    mummer_all_v_all(
+        as.matrix(potential_adjacents[,1:2]),
+        # potential_adjacents_list,
+        # as.matrix(potential_adjacents_list$clust_identity_diff[,1:2]),
+        delta_dir,
+        sync_dir 
+        )
+adj_delta_dir <- 
+    sprintf("%s/all_v_all", delta_dir)
+
+#clustered_genomes
+adjacent_clusters <- 
+    get_adjaceny(
+         adj_delta_dir, 
+         cluster_identity$clust_identity_diff
+    )
+
+adjacent_clusters
+
+edge_list <- 
+    graph_from_data_frame(
+        d =
+            data.frame(
+                source = adjacent_clusters$ref_clust,
+                target = adjacent_clusters$qry_clust
+                ),
+        directed = F
+    )
+## node size based on amount
+node_size_table <-
+    clustered_genomes %>% 
+    group_by(cluster_id) %>% 
+    summarise(seqs = unique(grouped_sequences)) %>%
+    ungroup %>%
+    mutate(size_v = rescale(seqs, to=c(15, 40))) %>%
+    filter(cluster_id %in% names(V(edge_list))) %>%
+    arrange(match(cluster_id, names(V(edge_list))))
+
+V(edge_list)$size <- 
+    node_size_table$size_v
+
+V(edge_list)$label.cex <- 
+    node_size_table$size_v
+
+plot(edge_list, vertex.label.cex=1.5, vertex.color="lightblue", edge.width= 3)
+
+
+#########
+
+clustered_genomes
+species_table %>%
+    left_join(
+        .,
+        clustered_genomes[,c(1,2)] %>% 
+            `colnames<-`(c("cluster", "accession")),
+        by = "accession"
+    ) %>% 
+    dplyr::select(
+        c(
+            2,3,4,5,6,7,8,10,12,13,25
+        )
+        ) %>% arrange(cluster) %>% View
+
+
+##########
+ 
+ species_identities$mash_plot
+
+species_identities$id_dists
+
+comparison_table <- 
+    inner_join(
+        species_identities$mash_tib,
+        as_tibble(
+            comp_matrix
+            ),
+        by = c("ref", "qry")
+    ) %>%
+    mutate(identity_dist = 100-identity) %>%
+    dplyr::select(
+        c("ref", "qry", "identity_dist", "sld")
+    ) %>%
+    `colnames<-`(c("ref", "qry", "identity", "length_difference"))
+
+## differences observed from pairwise alignment
+
+
+
+cds3 <- 
+    species_identities$id_dists %>%
+    inner_join(
+        ., 
+        clustered_genomes[,c(1,2)] %>% 
+            `colnames<-`(c("cluster", "Sequence"))
+    ) %>%
+    mutate(
+        cluster = factor(cluster)
+    )
+clsutered_genomes
+cluster_counts
+cds
+
+
+cds3 %>% pull(Sequence_mean_distance) %>% density %>% plot
+
+ggplot(
+    (cds3 %>% filter(cluster %in% c(0,1), Sequence_mean_distance<3)), 
+    aes(x = cluster, y=Sequence_mean_distance, fill=cluster)) +
+    geom_violin(trim = F) +  geom_jitter(width=0.1)+
+    geom_dotplot(y= Sequence_mean_distance)
+    #scale_fill_brewer(palette="Set2") + 
+    theme_classic()+
+    theme(
+        legend.text = element_text(size=30),
+        legend.key.size = unit(2, 'cm')
+        )
+
+
+stat_summary(fun.data="mean_sdl", geom="pointrange", width=0.2 )
+
+
+```
+
+
+## repeat counting
+```{r}
+pbmclapply(accession_list, function(x){
+        rep_com <-
+            sprintf(
+                "repeat-match %s/%s.txt > %s/%s_reps.txt",
+                sync_dir, x, repeats_dir, x
+            )
+        system(rep_com)
+    },
+    mc.cores = 6
+)
+
+
+```
+
+
+## other steps
+Annotation
+```{r}
+prokka_commands2<- 
+    annotate_fna2(
+        species_name, sync_dir, prokka_dir, accessions = c01$accessions
+    )
+
+writeLines(
+    text = 
+        prokka_commands2$comms,
+    con = 
+        prokka_commands2$file
+    )
+
+```
+
+```{bash}
+parallel sh ::: ../data/processing/prokka/Pseudomonadota/Salmonella/Salmonella_enterica/prokka_coms.txt
+
+parallel sh ::: ../data/processing/prokka/Pseudomonadota/Bordetella/Bordetella_parapertussis/prokka_coms.txt
+ls ../data/processing/prokka/Pseudomonadota/Bordetella/Bordetella_parapertussis
+
+
+find ../data/processing/prokka/Pseudomonadota/Bordetella/Bordetella_parapertussis \
+    -type f ! \( -name "*.txt" -o -name "*.gff" \) -exec rm -v {} +
+
+find ../data/processing/prokka/Spirochaetota/Leptospira/Leptospira_interrogans \
+    -type f ! \( -name "*.txt" -o -name "*.gff" \) -exec rm -v {} +
+
+```
+
+
+
+```{r}
+
+```
+
+
+
+```{r}
+
+
+nucmer_all_v_all(
+    accession_list, sync_dir, delta_dir
+)
+
+
+all_deltas <- 
+    list.files(
+        sprintf("%s/all_v_all", delta_dir), 
+        full.names = T
+        )
+
+delta_summary <- 
+    pbmclapply(
+        1:length(all_deltas),
+        function(i){
+            df_i <- 
+                read_delta(all_deltas[i]) %>%
+                mutate(
+                    qs2 = ifelse(strand=="+", qs, qe),
+                    qe2 = ifelse(strand=="+", qe, qs)
+                    ) 
+            #df_i %>% plot_delta
+            symmetric_invs <- 
+                df_i %>% 
+                filter_delta() %>%
+                filter(
+                    strand=="-",
+                    X_dist<5e4,
+                    meanlen>5e4
+                    ) %>% 
+                nrow()
+            
+            asymmetry <- 
+                df_i %>% 
+                filter_delta %>%
+                mutate(
+                    len_prop = 
+                        meanlen/mean(c(rlen, qlen)),
+                    asymmetry = 
+                        X_dist*len_prop
+                ) %>% pull(asymmetry) %>% mean
+            
+            ref_gaps <- 
+                IRanges(
+                    start = df_i$rs,
+                    end = df_i$re
+                ) %>% 
+                gaps(., start = 1, end = df_i$rlen[1]) %>%
+                width %>% 
+                sum()
+            
+            qry_gaps <- 
+                IRanges(
+                    start = df_i$qs2,
+                    end = df_i$qe2
+                ) %>% 
+                gaps(., start = 1, end = df_i$rlen[1]) %>%
+                width() %>% sum
+            mean_gap <- 
+                mean(c(ref_gaps, qry_gaps))
+            ## gap length total over mean length total
+            gap_dist_perc <- 
+                mean_gap/mean(c(df_i$rlen[1], df_i$qlen[1]))
+            
+            # df_i$X_dist %>% density %>% plot
+            out_tib <- 
+                tibble(
+                    ref = df_i$rid[1],
+                    qry = df_i$qid[1],
+                    gap_perc = gap_dist_perc,
+                    asymmetry = asymmetry,
+                    sym_invs = symmetric_invs
+                )
+            }
+        ) %>% bind_rows()
+
+bd_cors2 <- 
+    pbmclapply(
+        1:nrow(comp_matrix),
+        function(i){
+            ref_i <- 
+                as.character(comp_matrix[i,1])
+            qry_i <- 
+                as.character(comp_matrix[i,2])
+            ref_bd <- 
+                sprintf(
+                    "%s/%s.csv",
+                    bd_dir,
+                    ref_i
+                ) %>% 
+                fread()
+            qry_bd <- 
+                sprintf(
+                    "%s/%s.csv",
+                    bd_dir,
+                    qry_i
+                ) %>%
+                fread()
+            
+            if (nrow(ref_bd)>nrow(qry_bd)){
+                ld <- 
+                    nrow(ref_bd)-nrow(qry_bd)
+                ref_bd <- 
+                    ref_bd[
+                        -c(
+                            (nrow(ref_bd)-(ld-1)):
+                                nrow(ref_bd)),
+                        ]
+                
+            }
+            if (nrow(qry_bd)>nrow(ref_bd)){
+                ld <- 
+                    nrow(qry_bd)-nrow(ref_bd)
+                qry_bd <- 
+                    qry_bd[
+                        -c(
+                            (nrow(qry_bd)-(ld-1)):
+                                nrow(qry_bd)),
+                        ]
+                
+            }
+    
+            GC_cor <- 
+                cor(
+                    ref_bd$GC,
+                    qry_bd$GC, 
+                    method = "spearman"
+                )
+            AT_cor <- 
+                cor(
+                    ref_bd$AT,
+                    qry_bd$AT, 
+                    method = "spearman"
+                )
+            
+            out_tib <- 
+                tibble(
+                    ref = 
+                        ref_i,
+                    qry = 
+                        qry_i,
+                    GC_dist = 
+                        1-GC_cor,
+                    AT_dist = 
+                        1-AT_cor
+                )
+            
+        }
+    ) %>%
+    bind_rows()
+
+
+jd_tib2 <- 
+    lapply(
+        1:nrow(comp_matrix),
+        function(i){
+            genome1 <- 
+                #paste0(
+                    comp_matrix[i, 1][[1]]#, 
+                    #".txt")
+            genome2 <- 
+                #paste0(
+                    comp_matrix[i, 2][[1]]
+                    #, ".txt")
+    
+              # Extract presence/absence vectors for the two genomes
+            genome1_vector <- 
+                roary_gene2 %>% pull(genome1)
+            genome2_vector <- 
+                roary_gene2 %>% pull(genome2)
+              # Calculate Jaccard distance
+            jaccard_distance <- 
+                1 - sum(genome1_vector & genome2_vector) / 
+                sum(genome1_vector | genome2_vector)
+              # Store the results in the list
+            out_tib <- 
+                tibble(
+                    "ref" = 
+                        comp_matrix[i, 1][[1]],
+                    "qry" = 
+                        comp_matrix[i, 2][[1]],
+                    "Gene" =
+                        jaccard_distance
+                )
+        }
+    ) %>%
+    bind_rows()
+
+
+pca_df <- 
+    dplyr::select(
+        mt, Reference, Query
+        ) %>% 
+    mutate(
+            pc1 = 
+                pca_scores[,1],
+            pc2 = 
+                pca_scores[,2],
+            pc3 = 
+                pca_scores[,2]
+        )
+    
+
+mt2 <- 
+    inner_join(
+        comparison_table, 
+        delta_summary,
+        by = c("ref", "qry")
+    ) %>%
+    inner_join(
+        ., 
+        bd_cors2, 
+        by = c("ref", "qry")
+    ) %>%
+    inner_join(
+        ., 
+        jd_tib2, 
+        by = c("ref", "qry")
+    ) %>% 
+    dplyr::select(
+        1:6, 8:10, 7
+    ) %>%
+    #mutate_at(vars(3:9), scale) %>%
+    `colnames<-`(
+        c(
+            "Reference", "Query", "Identity", 
+            "Length", "Gaps", "Asymmetry",
+            "GC", "AT", "Gene", "Inversions"
+            )
+    )  
+
+cvs <- 
+     c(
+            "Identity", 
+            "Length", "Gaps", "Asymmetry",
+            "GC", "AT", "Gene"
+            )
+
+seq_dists <- 
+    lapply(
+        1:length(cvs), 
+        function(i){
+            cv <- 
+                cvs[i]
+            cvt <- 
+                mt2 %>%
+                dplyr::select(c("Reference", "Query", cv)) %>% 
+                spread(key = Query, value = cv, fill = 0)%>%
+                as.data.frame() %>%
+                column_to_rownames("Reference")
+            cvd <- 
+                get_dists(cvt)[,-3] %>%
+                `colnames<-`(
+                    c(
+                        "accessions", 
+                        paste0(cv, "_mean_dist"),
+                        paste0(cv, "_mean_diff")
+                        )
+                    )
+                
+            
+        }
+    ) %>%
+    Reduce(function(x, y) merge(x, y, by = 1), .) %>%
+    as_tibble() %>%
+    inner_join(
+        ., 
+        clustered_genomes, 
+        by = "accessions"
+    )
+
+
+seq_dists %>% filter(c(cluster_id %in% c(0))) %>% pull(Identity_mean_diff) %>% plot()
+
+
+id_diff <- 
+    tibble(
+        ids = 
+            c(
+                seq_dists %>% filter(c(cluster_id %in% c(0))) %>% 
+                pull(Identity_mean_diff),
+                seq_dists %>% filter(c(cluster_id %in% c(1))) %>% 
+                pull(Identity_mean_diff)
+            ),
+        clust = 
+            c(
+                rep(
+                    0,
+                    seq_dists %>% filter(c(cluster_id %in% c(0))) %>% nrow()
+                    ),
+                rep(
+                    1,
+                    seq_dists %>% filter(c(cluster_id %in% c(1))) %>% nrow()
+                    )
+            ) %>% factor()
+    )
+ggplot(id_diff, aes(x = clust, y=ids, color=clust)) +
+    geom_violin(trim = F) + stat_summary(fun.data="mean_sdl",
+                 geom="pointrange", width=0.2 )
+
+plot(
+    x = 
+        seq_dists %>% filter(c(cluster_id %in% c(0))) %>% pull(Identity_mean_diff),
+    y = 
+        seq_dists %>% filter(c(cluster_id %in% c(1))) %>% pull(Identity_mean_diff)
+)
+
+seq_dsts_pca_ILAG <- 
+       prcomp(
+            seq_dists[,
+                      c(
+                          "Identity_mean_diff", "Length_mean_diff",
+                          "Gaps_mean_diff", "Asymmetry_mean_diff",
+                          "GC_mean_diff", "AT_mean_diff", "Gene_mean_diff"
+                          )
+                      ], 
+            center = T, scale = T
+            )
+
+seq_dists2 <- 
+    seq_dists %>% 
+    filter(!(cluster_id %in% c(1,10,4)))
+
+seq_dsts_pca_ILAG2 <- 
+       prcomp(
+            seq_dists2[,
+                      c(
+                          "Identity_mean_diff", "Length_mean_diff",
+                          "Gaps_mean_diff", "Asymmetry_mean_diff",
+                          "GC_mean_diff", "AT_mean_diff", "Gene_mean_diff"
+                          )
+                      ], 
+            center = T, scale = T
+            )
+
+
+seq_dsts_pca_ILAG2 <- 
+    seq_dsts_pca_ILAG$x[, 1:3]
+
+seq_dsts_pca_ILAG2x <- 
+    seq_dsts_pca_ILAG2$x[,1:3]
+pca_df4 <- 
+    data.frame(seq_dsts_pca_ILAG2x, cluster = as.factor(seq_dists2$cluster_id))
+
+    ggplot(pca_df4, aes(x = PC1, y = PC2, color = cluster)) +
+        geom_point(size = 5) +
+        labs(x = "PC1", y = "PC2") +
+        ggtitle("PCA all") +
+        theme(plot.title = element_text(hjust = 0.5)) +
+        scale_color_brewer(palette = "Paired")+
+    theme(legend.text=element_text(size=14))
+
+library(nnet)
+mn_model <- 
+    multinom(
+        cluster_id ~ 
+            Identity_mean_diff + Length_mean_diff +
+            Gaps_mean_diff + Asymmetry_mean_diff +
+            GC_mean_diff + AT_mean_diff + Gene_mean_diff, 
+        data = seq_dists
+        )
+
+gam_model <- 
+    gam(
+        Inversions ~ s(Identity) + s(Length) + s(Gaps) +
+            s(Asymmetry) + s(GC) + s(AT) + s(Gene), 
+        data = mt
+        )
+summary(gam_model)
+
+persp(Identity, Length, Inversions)
+png(filename = "../data/plots/pairs.png")
+pairs(~ Inversions + (Identity) + (Length) + (Gaps) +
+            (Asymmetry) + (GC) + (AT) + (Gene), data = mt)
+dev.off()
+
+pca_df3 <- 
+    data.frame(seq_dsts_pca_ILAG2, cluster = as.factor(seq_dists$cluster_id))
+
+
+
+
+    ggplot(pca_df3, aes(x = PC1, y = PC2, color = cluster)) +
+        geom_point(size = 5) +
+        labs(x = "PC1", y = "PC2") +
+        ggtitle("PCA all") +
+        theme(plot.title = element_text(hjust = 0.5)) +
+        scale_color_brewer(palette = "Paired")+
+    theme(legend.text=element_text(size=14))
+
+
+umap_result3 <-
+    umap(seq_dsts_pca_ILAG2)
+
+umap_df3 <- 
+    as.data.frame(umap_result3$layout) %>%
+    mutate(
+        cluster = as.factor(seq_dists$cluster_id)
+    )
+
+ggplot(umap_df3, aes(x = V1, y = V3, colour = cluster)) +
+  geom_point(size = 5) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+    scale_color_brewer(palette="Paired") +
+    theme(legend.text=element_text(size=14))
+    
+
+fviz_pca_var(seq_dsts_pca_ILAG,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+    
+
+clustered_genomes
+mt2
+
+
+clustered_genom
+
+
+cgss <- 
+    fread(
+        "../../rasr_phylo/results/Spirochaetota/Leptospira/Leptospira_interrogans/clustered_genomes.csv"
+        ) %>% 
+    as_tibble() %>%
+    dplyr::select(c(1,2))  %>%
+    filter(
+        accessions %in%
+            unique(c(pull(mt_groups, "Reference"), pull(mt_groups, "Query")))
+    )
+
+
+id_distmat <- 
+    mt[,c(1:3)] %>%
+    bind_rows(
+        ., 
+        mt[,c(1:3)] %>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, Identity, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+len_distmat <- 
+    mt %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "Length"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        mt %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "Length"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, Length, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+colnames(mt)
+
+Gaps_distmat <- 
+    mt %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "Gaps"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        mt %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "Gaps"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, Gaps, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+Asymmetry_distmat <- 
+    mt %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "Asymmetry"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        mt %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "Asymmetry"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, Asymmetry, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+GC_distmat <- 
+    mt %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "GC"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        mt %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "GC"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, GC, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+AT_distmat <- 
+    mt %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "AT"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        mt %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "AT"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, AT, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+Gene_distmat <- 
+    mt %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "Gene"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        mt %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "Gene"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, Gene, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+
+PCA_distmat <- 
+    pca_df %>%
+    mutate(pc1 = pc1+5) %>%
+    dplyr::select(
+        c(
+            "Reference", "Query",
+            "pc1"
+            )
+        ) %>%
+    bind_rows(
+        ., 
+        pca_df %>%
+            mutate(pc1 = pc1+5) %>%
+        dplyr::select(
+        c(
+            "Reference", "Query",
+            "pc1"
+            )
+        )%>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, pc1, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+
+umap_result2 <-
+    umap(pca_scores2)
+
+umap_df2 <- 
+    as.data.frame(umap_result2$layout) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+ggplot(umap_df2, aes(x = V1, y = V2, colour = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+    scale_color_brewer(palette="Paired")
+
+
+###
+
+mt_groups <- 
+    mt %>% 
+    dplyr::select(Reference, Query, Inversions) %>%
+    left_join(
+        ., 
+        clustered_genomes %>% `colnames<-`(c("Ref_clust", "Reference")),
+        by = "Reference"
+    ) 
+
+
+install.packages("Fragman")
+install.packages("basetheme")
+library(Fragman)
+library(basetheme)
+# Define a color palette with 5 different colors
+col_v <- c("red", "blue", "green", "orange", "purple")
+
+png(filename = "../data/plots/NJ/Identity.png")
+ape::nj(id_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v, main = "Identity")
+dev.off()
+png(filename = "../data/plots/NJ/Length.png")
+ape::nj(len_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v, main = "Length")
+dev.off()
+png(filename = "../data/plots/NJ/Gaps.png")
+ape::nj(Gaps_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="Gaps")
+dev.off()
+png(filename = "../data/plots/NJ/Asymmetry.png")
+ape::nj(Asymmetry_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="Asymmetry")
+dev.off()
+png(filename = "../data/plots/NJ/GC.png")
+ape::nj(GC_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="GC")
+dev.off()
+png(filename = "../data/plots/NJ/AT.png")
+ape::nj(AT_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="AT")
+dev.off()
+png(filename = "../data/plots/NJ/Gene.png")
+ape::nj(Gene_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="Gene")
+dev.off()
+
+
+## UPGMA
+#install.packages("phangorn")
+library(phangorn)
+png(filename = "../data/plots/UPGMA/Identity.png")
+upgma(id_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v, main = "Identity")
+dev.off()
+png(filename = "../data/plots/UPGMA/Length.png")
+upgma(len_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v, main = "Length")
+dev.off()
+png(filename = "../data/plots/UPGMA/Gaps.png")
+upgma(Gaps_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="Gaps")
+dev.off()
+png(filename = "../data/plots/UPGMA/Asymmetry.png")
+upgma(Asymmetry_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="Asymmetry")
+dev.off()
+png(filename = "../data/plots/UPGMA/GC.png")
+upgma(GC_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="GC")
+dev.off()
+png(filename = "../data/plots/UPGMA/AT.png")
+upgma(AT_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="AT")
+dev.off()
+png(filename = "../data/plots/UPGMA/Gene.png")
+upgma(Gene_distmat) %>% 
+    plot(., direction = "downwards", tip.color = col_v,  main ="Gene")
+dev.off()
+
+
+library(mgcv)
+
+gam_model <- 
+    gam(
+        Inversions ~ s(Identity) + s(Length) + s(Gaps) +
+            s(Asymmetry) + s(GC) + s(AT) + s(Gene), 
+        data = mt
+        )
+summary(gam_model)
+
+persp(Identity, Length, Inversions)
+png(filename = "../data/plots/pairs.png")
+pairs(~ Inversions + (Identity) + (Length) + (Gaps) +
+            (Asymmetry) + (GC) + (AT) + (Gene), data = mt)
+dev.off()
+
+
+plot(gam_model)
+plot(gam_model, residuals = TRUE)
+
+
+
+
+png(filename = "../data/plots/PCA.png")
+ape::nj(PCA_distmat) %>% plot(., direction = "downwards", tip.color = col_v)
+dev.off()
+
+
+####
+mt2_pca <- 
+   prcomp(
+    mts[,c("Identity", "Length", "Asymmetry", "GC")], center = T, scale = T
+   )
+
+mt3_pca <- 
+   prcomp(
+    mts[,c("Identity", "Length", "Asymmetry", "GC")], center = T, scale = T
+   )
+pca_scores2 <- 
+    mt2_pca$x[, 1:3]
+
+
+pca_df2 <- 
+    data.frame(pca_scores2, Inversions = as.factor(mt$Inversions))
+
+
+
+ILAG <- 
+    ggplot(pca_df2, aes(x = PC1, y = PC2, color = Inversions)) +
+    geom_point(size = 4) +
+    labs(x = "PC1", y = "PC2") +
+    ggtitle("Identity, Length, Asymmetry, GC") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+
+
+
+
+
+umap_result2 <-
+    umap(pca_scores2)
+
+umap_df2 <- 
+    as.data.frame(umap_result2$layout) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+ggplot(umap_df2, aes(x = V1, y = V2, colour = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+    scale_color_brewer(palette="Paired")
+
+# Convert the result to a data frame
+tsne_result2 <- 
+    Rtsne(pca_scores2, dims = 3, perplexity = 10)
+
+tsne_df2 <- 
+    as_tibble(tsne_result2$Y) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+# Plot t-SNE result
+ggplot(tsne_df2, aes(x = V1, y = V3, color = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "t-SNE 1", y = "t-SNE 2") +
+  ggtitle("t-SNE Plot")
+
+
+
+
+
+tol18rainbow=c(
+    "#771155", "#AA4488", "#CC99BB", "#114477", "#4477AA", "#77AADD", 
+    "#117777", "#44AAAA", "#77CCCC", "#777711", "#AAAA44", "#DDDD77", 
+    "#774411", "#AA7744", "#DDAA77", "#771122", "#AA4455", "#DD7788"
+    )
+# I assume here, the word before the "_" tells us how to colour the label
+TYPE = gsub("_[^ ]*","",cgss$cluster_id)
+# check the TYPE numbers are correct
+col_assignment = tol18rainbow[1:length(unique(TYPE))]
+names( col_assignment) = unique(TYPE)
+COLS = col_assignment[TYPE]
+
+
+
+tiplabels(
+    pch = 21,
+    bg = 
+        col_v[match(cgss$cluster_id, unique(cgss$cluster_id))]
+    )
+
+
+
+
+
+
+mt_groups %>% as.data.frame() %>% filter(Inversions==0)
+cgs <- 
+    list(
+        "1" = 
+            c(
+                "NZ_CP092161.1", "NZ_CP092663.1",
+                "NZ_CP092676.1", "NZ_CP092739.1", 
+                "NZ_CP097315.1"
+                ),
+        "2" = 
+            c(
+                "NZ_CP092156.1", "NZ_CP092161.1",
+                "NZ_CP092663.1"
+            ),
+        "3" =
+            c(
+                "NZ_CP092743.1"
+            )
+    )
+
+
+
+lapply(
+    1:nrow(mt_groups),
+    function(i){
+        mt_groups
+    }
+    )    
+
+
+
+lapply(
+    split(mt_groups, mt_groups$Inversions), 
+    function(group) 
+        unique(group[, c("Reference", "Query")])
+    )
+
+
+##distance matrix for each variable
+id_distmat <- 
+    mt[,c(1:3)] %>%
+    bind_rows(
+        ., 
+        mt[,c(1:3)] %>%
+            mutate(
+                r2 = Query, q2 = Reference,
+                Reference = r2, Query = q2
+                ) %>% 
+            dplyr::select(1:3)
+    ) %>%
+    spread(., Query, Identity, fill = 0) %>% 
+    column_to_rownames(., "Reference") %>%
+    as.matrix()
+
+pheatmap::pheatmap(as.matrix(id_distmat))
+
+tibble(
+    id1 = c("a", "a", "b"),
+    id2 = c("b", "c", "c"),
+    val = c(1,2,3)
+)
+
+
+ape::nj(id_distmat) %>% plot
+tiplabels(pch = 21, bg = ifelse(group_data$group == "Group1", "red", "blue"))
+
+
+ggtree() + geom_tiplab()
+
+
+mt %>%
+    mutate_at(vars(3:9), function(x){round(x, 2)}) %>%
+    mutate(
+        Reference = 
+            gsub("\\..*", "",  gsub("NZ_", "", Reference)),
+        Query = 
+            gsub("\\..*", "",  gsub("NZ_", "", Query))
+    ) %>% dplyr::slice(1:10) %>%
+  kbl(., align = "c", digits = 3) %>%
+  kable_paper("striped", full_width = F,  font_size = 14) %>%
+  kable_classic(full_width = F, html_font = "Calibri",  font_size = 14) %>%
+  column_spec(column = 1:3, width = "0.6in") %>%
+  row_spec(0, bold=T, font_size  =14)
+
+
+
+# roary_gene <- 
+#     fread(
+#         #"../data/processing/roary/out_1707835783/gene_presence_absence.csv"
+#         "../data/processing/roary/out_1707835783/gene_presence_absence.Rtab"
+#         ) %>%
+#     as_tibble
+
+roary_gene2 <-
+    fread(
+        #"../data/processing/roary/out_1707835783/gene_presence_absence.csv"
+        "../data/processing/roary/out2/gene_presence_absence.Rtab"
+        ) %>%
+    as_tibble
+#     
+# comp_matrix
+# jd_list <- list()
+
+# Loop over each combination
+
+  
+
+# JD <- 
+#     1 - 
+#     sum(roary_gene$NZ_CP072853.1.txt & roary_gene$NZ_CP092151.1.txt) /
+#     sum(roary_gene$NZ_CP072853.1.txt | roary_gene$NZ_CP092151.1.txt)
+
+
+mts <- 
+    mt %>%
+    dplyr::select(-c(1,2,10)) %>%
+    as.matrix() 
+
+
+plot(
+    mt$Gaps,
+    mt$Length,
+)
+cor(mt$Gaps,
+    mt$Length)
+
+mt_pca <- 
+   prcomp(
+    mts, center = T, scale = T
+   )
+pca_scores <- 
+    mt_pca$x[, 1:3]
+
+
+pca_df <- 
+    data.frame(pca_scores, Inversions = as.factor(mt$Inversions))
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Inversions)) +
+  geom_point() +
+  labs(x = "PC1", y = "PC2") +
+  ggtitle("PCs vs Symmetric inversions")
+
+
+    Rtsne(pca_scores, dims = 3, perplexity = 10)
+
+umap_result <-
+    umap(pca_scores)
+
+umap_df <- 
+    as.data.frame(umap_result$layout) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+ggplot(umap_df, aes(x = V1, y = V2, colour = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+    scale_color_brewer(palette="Paired")
+
+# Convert the result to a data frame
+tsne_df <- 
+    as_tibble(tsne_result$Y) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+# Plot t-SNE result
+ggplot(tsne_df, aes(x = V1, y = V3, color = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "t-SNE 1", y = "t-SNE 2") +
+  ggtitle("t-SNE Plot")
+
+
+
+
+
+library(MASS)
+
+inds <- 
+    c(
+        "Identity", "Length",
+        "Gaps", "Asymmetry", 
+        "GC", "AT", "Gene"
+    )
+
+model_list <- 
+    lapply(
+        inds,
+        function(x){
+            model1 <- 
+                polr(
+                    factor(mt$Inversions, ordered = T) ~ 
+                        pull(mt, x), 
+                    data = 
+                        mt[,-c(1,2)], 
+                    Hess = TRUE, method = "probit"
+                    )%>% stats::AIC()
+            out_tib <- 
+                tibble(
+                variable = x,
+                AIC = model1
+            )
+            return(out_tib)
+        }
+    ) %>% 
+    bind_rows()
+model1 <- 
+    polr(
+        factor(mt$Inversions, ordered = T) ~ 
+            Identity, #+ Length + Gaps + Asymmetry + GC + AT + Gene, 
+        data = 
+            mt[,-c(1,2)], 
+        Hess = TRUE, method = "probit"
+        )
+
+
+model1 %>% stats::AIC()
+coef(model1)$values
+
+library(stepPlr)
+library(Rtsne)
+library(umap)
+
+tsne_result <- 
+    Rtsne(pca_scores, dims = 3, perplexity = 10)
+
+umap_result <-
+    umap(pca_scores)
+
+umap_df <- 
+    as.data.frame(umap_result$layout) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+ggplot(umap_df, aes(x = V1, y = V2, colour = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+    scale_color_brewer(palette="Paired")
+
+# Convert the result to a data frame
+tsne_df <- 
+    as_tibble(tsne_result$Y) %>%
+    mutate(
+        Inversions = as.factor(mt$Inversions)
+    )
+
+# Plot t-SNE result
+ggplot(tsne_df, aes(x = V1, y = V3, color = Inversions)) +
+  geom_point(size = 3) +
+  labs(x = "t-SNE 1", y = "t-SNE 2") +
+  ggtitle("t-SNE Plot")
+
+
+library("factoextra")
+
+saveRDS(mt, "../mt.RDS")
+
+fviz_pca_var(mt_pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+
+## base disparities
+
+
+list.files(bd_dir, full.names = T)[1] %>% fread()
+list.files(bd_dir, full.names = T)[2] %>% fread()
+# read_delta(
+#     all_deltas[5]
+# ) %>% filter_delta %>% plot_delta
+
+
+```
+
+
+Multivariate analyses of sequence and structural similarity
+
+
+```{r}
+suppressMessages(synchronize(species_table[1:12,], sync_dir, gff_dir))
+
+
+sprintf(
+        "%i out of %i sequences synchronized",
+        length(list.files(sync_dir)), 12
+    )
+
+species_identities <- 
+        get_pairwise_identities(
+            identity_dir, species_summary, 
+            genus_name, species_name
+            )
+
+
+most_related <- 
+    as.character(species_identities$mash_tib[1,1][[1]])
+accession_list <-
+    list.files(sync_dir) %>%
+    sub(".txt", "", .)
+    
+
+
+    
+
+```
+
+
+Download complete sequences and annotations
+```{r}
+fna_table <- 
+    download_fna(species_table, fna_dir)
+
+system(
+    sprintf(
+        "gunzip %s/*.gz",
+        fna_dir
+    )
+)
+
+fna_dir
+
+## create directories for each genome
+lapply(
+    1:length(list.files(fna_dir, pattern = ".fna")),
+    function(i){
+    #for (i in 1:length(list.files(fna_dir, pattern = ".fna"))){
+        full_record <- 
+            readDNAStringSet(
+                list.files(fna_dir, full.names = T, pattern = ".fna")[i]
+                ) 
+
+        # make sure it's sorted
+        full_record <- 
+            full_record[order(width(full_record), decreasing = T),]
+        
+        # no plasmids, phages
+        full_record <- 
+            full_record[
+                grep(
+                    names(full_record), 
+                    pattern = "plasmid", ignore.case = T, invert = T
+                    ) 
+                ]
+        
+        acc_name <- 
+            list.files(fna_dir, pattern = ".fna")[i] %>% 
+            gsub(".fna", "", .)
+        
+        for (j in 1:length(full_record)){
+            chr_dir <- 
+                sprintf("%s/chr%i", fna_dir, j)
+            if (!dir.exists(chr_dir)){dir.create(chr_dir)}
+            writeXStringSet(
+                full_record[j] %>%
+                    `names<-`(acc_name),
+                sprintf(
+                    "%s/%s.fna",
+                    chr_dir, acc_name
+                    )
+            )
+        }
+        
+        
+    }
+    
+)
+
+
+
+list.files(fna_dir)
+
+## fasta files will contain multiple sequences representing other chromosomes
+readDNAStringSet(list.files(fna_dir, full.names = T)[3]) %>% names()
+
+
+ss <- 
+    species_table %>%
+    dplyr::slice(1:10)
+
+ss
+```
+
+Annotation with Prokka
+https://pubmed.ncbi.nlm.nih.gov/24642063/
+```{r}
+# prokka_commands <- 
+#     annotate_fna(
+#         species_name, 
+#         sprintf(
+#             "%s/chr1",
+#             fna_dir
+#         ), 
+#         gff_dir
+#         )
+prokka_commands2<- 
+    annotate_fna2(
+        species_name, sync_dir, prokka_dir 
+    )
+
+writeLines(
+    text = 
+        prokka_commands2$comms,
+    con = 
+        prokka_commands$file
+    )
+
+prokka_commands <- 
+    annotate_fna(
+        species_name, 
+        sprintf(
+            "%s/chr1",
+            fna_dir
+        ), 
+        gff_dir
+        )
+
+writeLines(
+    text = 
+        prokka_commands$comms[11:12],
+    con = prokka_commands$file
+    )
+```
+
+
+```{bash}
+parallel sh ::: ../data/processing/prokka/Spirochaetota/Leptospira/Leptospira_interrogans/prokka_coms.txt
+
+cp ../data/processing/gff/Spirochaetota/Leptospira/Leptospira_interrogans/*.gff ../data/processing/roary/in/
+
+roary -e -mafft -p 7 ../data/processing/roary/in/*.gff -f ../data/processing/roary/out
+
+
+
+cp ../data/processing/gff/Spirochaetota/Leptospira/Leptospira_interrogans/*.gff ../data/processing/roary
+
+
+
+roary -e -mafft -p 7 ../data/processing/roary/*.gff -f ../data/processing/roary/out
+
+roary -e -mafft -p 7 \
+    ../data/processing/gff/Spirochaetota/Leptospira/Leptospira_interrogans/subset/*.gff \
+    -f ../data/processing/roary/out3
+
+
+```
+
+## copy a subset
+```{r}
+list.files(prokka_dir, full.names = T, pattern = ".gff")
+file.copy(
+    list.files(prokka_dir, full.names = T, pattern = ".gff")[1:30],
+    to = "../data/processing/roary/in2",
+    overwrite = T
+)
+
+```
+
+
+
+```{r}
+prokka_commands[[1]]
+
+prokka_commands[1] %>% system()
+system(
+    "parallel sh ::: ../data/processing/prokka/Spirochaetota/Leptospira/Leptospira_interrogans/prokka_coms.txt"
+    )
+```
+
+
+Skew metrics can be used to calculate dissimilarity and find the origin of replication
+
+## calculate skew metrics
+
+The cumulative GC and AT content at each position of the genome will vary. Generally the GC curve forms  inflection points with the minimum at origin and the maximum at the terminus.
+
+dot skew and residual skew of each genome
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6042203/
+
+```{r}
+list.files(fna_dir, full.names = T)
+
+skew_metrics <- 
+    system(
+        sprintf(
+            "./skew_metrics.pl %s %s",
+            list.files(fna_dir, full.names = T)[1],
+            list.files(gff_dir, full.names = T, pattern = ".gff")[1]
+        )
+    )
+
+```
+
+
+Sequence dissimilarity using Roary cgMLST
+```{r}
+
+```
+
+
+
+Sequence similarity using MASH
+```{r}
+
+```
+
+
+
+
+
+
+## Roary pangenome phylogeny and sequence similarity
+
+
+

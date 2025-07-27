@@ -1,0 +1,69 @@
+---
+title: "f5"
+output: html_document
+date: "2024-07-20"
+---
+
+
+## BSPN protocol
+```{r}
+
+```
+
+
+
+
+```{r}
+new_out_deltadir <- 
+      sprintf("%s/all", delta_dir)
+    
+if (!dir.exists(new_out_deltadir)){dir.create(new_out_deltadir)}
+
+
+delta_identities <- 
+    pbmclapply(
+        1:length((list.files(new_out_deltadir))),
+        function(i){
+            delta_tib <- 
+                read_delta(list.files(new_out_deltadir, full.names = T)[i]) 
+            
+            nucmer_id <- 
+                sum(
+                    delta_tib$meanlen
+                    )/
+                (mean(
+                    c(
+                        delta_tib$rlen[1], 
+                        delta_tib$qlen[1])
+                     ))
+            c
+            out_tib <- 
+                tibble(
+                    accession = 
+                        delta_tib$qid[1],
+                    identity = 
+                        nucmer_id
+                )
+            
+            return(out_tib)
+            
+        }, mc.cores = 4
+    ) %>% bind_rows()
+
+best_identity <- 
+    left_join(
+        delta_identities %>% `colnames<-`(c("accessions", "identity")),
+        clustered_genomes,
+        by = "accessions"
+    )
+
+bis <- 
+    best_identity %>% 
+    group_by(cluster_id) %>%
+    arrange(desc(identity)) %>% 
+    filter(!is.na(cluster_id)) %>%
+    dplyr::slice(1)
+
+
+```
+
