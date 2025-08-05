@@ -1,0 +1,979 @@
+---
+title: "Ch4"
+output: html_document
+date: "2025-07-15"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+## creating delta files 
+
+
+
+### getting all delta files
+```{r}
+
+
+the_rest <- 
+  species_table %>%
+  filter(
+    !(basename(ftp_path) %in% assembly_table$asm_name)
+  )
+  
+ap_i <- 
+  the_rest$ftp_path[1]
+
+
+assembly_path <- 
+  ap_i
+
+ref_path <- 
+  sprintf(
+    "%s/%s.txt",
+    sync_dir, most_related
+  )
+
+alignment_dir_the_rest <- 
+  sprintf(
+    "%s/1v_the_rest",
+    alignment_dir
+  )
+sync_dir_the_rest <- 
+  sprintf(
+    "%s/1v_the_rest",
+    sync_dir
+  )
+
+if (!dir.exists(alignment_dir_the_rest)){dir.create(alignment_dir_the_rest)}
+
+if (!dir.exists(sync_dir_the_rest)){dir.create(sync_dir_the_rest)}
+
+sync_dir
+most_related
+
+al_list <- 
+  list()
+
+al_list_head <- 
+  bind_rows(al_list)
+
+
+the_rest
+
+al_list_tail <- 
+  pbmclapply(
+    622:nrow(the_rest),
+    function(i){
+      assembly_path <- 
+      the_rest$ftp_path[i]
+    out_tib <- 
+      arrange_align(
+        assembly_path, 
+        ref_path,
+        alignment_dir_the_rest,
+        sync_dir_the_rest
+      )
+      return(out_tib)
+    },
+    mc.cores = 4
+  )
+
+ori_positions_tib <- 
+  bind_rows(
+    al_list_head,
+    bind_rows(al_list_tail)
+  )
+
+al_list <- list()
+1
+
+#pb <- txtProgressBar(min = 1, max = 10, style = 3)
+
+install.packages("tictoc")  # if not already installed
+library(tictoc)
+tic("my analysis")
+pb <- txtProgressBar(min = 10, max = nrow(the_rest), style = 3)
+for (i in 10:nrow(the_rest)){
+  
+  
+  assembly_path <- 
+    the_rest$ftp_path[i]
+  
+  ## arrange and align
+  al_list[[i]] <- 
+    arrange_align(
+      assembly_path, 
+      ref_path,
+      alignment_dir_the_rest,
+      sync_dir_the_rest
+    )
+  setTxtProgressBar(pb, i)
+}
+close(pb)
+
+
+
+al_list %>% bind_rows()
+
+toc()
+
+
+sync_dir_the_rest %>% list.files()
+
+
+all_delta_filt_files <- 
+  c(
+    list.files(
+      sprintf(
+        "%s/1v_the_rest",
+        alignment_dir
+        ),
+      full.names = T, pattern = "filtered"
+    ),
+    list.files(
+      sprintf(
+        "%s/one_vs_all",
+        alignment_dir
+        ),
+      full.names = T, pattern = "filtered"
+    )
+  )
+
+all_delta_unfilt_files <- 
+  c(
+    list.files(
+      sprintf(
+        "%s/1v_the_rest/unfiltered",
+        alignment_dir
+        ),
+      full.names = T
+    ),
+    list.files(
+      sprintf(
+        "%s/one_vs_all/unfiltered",
+        alignment_dir
+        ),
+      full.names = T
+    )
+  )
+
+synced_files <- 
+  al_list %>% bind_rows() %>%
+  mutate(
+    kept = file.exists(out_file)
+  ) %>%
+  left_join(
+    ., 
+  )
+
+synced_files %>% filter(kept)
+
+  
+clustered_genomes %>% count(cluster_id)
+
+
+
+filt_basenames  <- basename(all_delta_filt_files)
+filt_core_names <- sub("_filtered\\.delta$", "", filt_basenames)
+
+unfilt_basenames  <- basename(all_delta_unfilt_files)
+unfilt_core_names <- sub("\\.delta$", "", unfilt_basenames)
+
+# Create a named vector to easily look up unfiltered files by core name
+unfilt_lookup <- setNames(all_delta_unfilt_files, unfilt_core_names)
+
+n <- length(all_delta_filt_files)
+all_results <- vector("list", n)
+
+pb <- txtProgressBar(min = 188, max = n, style = 3)
+
+for (i in 1:n) {
+  core_name <- filt_core_names[i]
+  filtered_delta <- all_delta_filt_files[i]
+  
+  if (!core_name %in% names(unfilt_lookup)) {
+    warning(sprintf("No unfiltered file found for %s, skipping...", filtered_delta))
+    next
+  }
+  unfiltered_delta <- unfilt_lookup[[core_name]]
+  species_name <- "Salmonella_enterica" # change as needed
+  
+  all_results[[i]] <- 
+    delta_all_SVs(
+      delta_file = filtered_delta, 
+      unfiltered_delta_file = unfiltered_delta,
+      species_name = species_name
+  )
+  
+  setTxtProgressBar(pb, i)
+}
+
+close(pb)
+
+
+main_svs <- 
+  bind_rows(all_results)
+
+
+main_svs$qid %>% unique %>% length
+
+```
+
+
+### combining delta files and clustering by major SVs
+
+```{r}
+
+
+
+
+
+minimum_alignment_percentage <- 
+    90
+minimum_inversion_length <- 
+    5e4
+
+list.files(alignment_dir_the_rest, full.names = F) %>% length
+
+filtered_combined_delta <- 
+    filter_combined_delta(
+        alignment_dir_the_rest, 
+        minimum_alignment_percentage, 
+        minimum_inversion_length
+    ) 
+
+clustered_genomes_list <- 
+    cluster_genomes(filtered_combined_delta)
+
+cluster_coords <- clustered_genomes_list$cluster_coords
+clustered_genomes_list$cluster_summary %>% count(cluster_id)
+
+clustered_genomes_list$cluster_coords %>%
+  filter(grepl("NC_003198.1", accessions)) %>% pull(width)
+
+
+clustered_genomes <- 
+  clustered_genomes_list$cluster_summary
+
+set.seed(123)
+clustered_genomes_ss <- 
+  clustered_genomes %>%
+  group_by(cluster_id) %>% 
+  slice_sample(n = 20, replace = FALSE)
+
+
+
+genome_geoups <- 
+    al_list_head %>%
+      filter(
+        accession %in% clustered_genomes_ss$accessions
+      ) %>%
+      left_join(
+        .,
+        the_rest %>%
+          transmute(
+            ftp_path, 
+            asm_name = basename(ftp_path)
+          ),
+        by = "asm_name" 
+        )
+
+
+
+la_list <- 
+  pbmclapply(
+    1:nrow(genome_geoups),
+    function(i){
+      assembly_path <- 
+      genome_geoups$ftp_path[i]
+    out_tib <- 
+      load_arrange(
+        assembly_path, 
+        sync_dir_the_rest
+      )
+      return(out_tib)
+    },
+    mc.cores = 4
+  )
+
+
+  clustered_genomes_ss %>% as.data.frame()
+
+
+dfs <- 
+  list.files(alignment_dir_the_rest, full.names = T, pattern = "_filtered.delta")
+delta_identities <- 
+    pbmclapply(
+        1:length(dfs),
+        function(i){
+            delta_tib <- 
+                read_delta(
+                  dfs[i]
+                  ) 
+            
+            nucmer_id <- 
+                sum(
+                    delta_tib$meanlen
+                    )/
+                (mean(
+                    c(
+                        delta_tib$rlen[1], 
+                        delta_tib$qlen[1])
+                     ))
+            c
+            out_tib <- 
+                tibble(
+                    accession = 
+                        delta_tib$qid[1],
+                    identity = 
+                        nucmer_id
+                )
+            
+            return(out_tib)
+            
+        }, mc.cores = 4
+    ) %>% bind_rows()
+
+best_identity <- 
+    left_join(
+        delta_identities %>% `colnames<-`(c("accessions", "identity")),
+        clustered_genomes,
+        by = "accessions"
+    )
+
+
+
+
+expanded_clusters <- cluster_coords %>%
+  separate_rows(accessions, sep = ",\\s*") 
+
+svs_by_cluster <- 
+  expanded_clusters %>%
+  left_join(
+    msv2, 
+    by = c("accessions" = "qid"), 
+    relationship = "many-to-many"
+    ) %>%
+  mutate(
+    sv_id = paste0(accessions, "_", start.y, "_", end.y, "_", variant)
+  )
+
+
+sv_uniqueness <- svs_by_cluster %>%
+  group_by(sv_id) %>%
+  summarise(clusters_found = n_distinct(cluster), .groups = "drop")
+
+non_singleton_SVs <- 
+  svs_by_cluster %>%
+  group_by(sv_id) %>%
+  summarise(num_genomes = n_distinct(accessions)) %>%
+  filter(num_genomes > 1)
+
+
+SSRs %>% 
+  filter(grepl("NC_011149.1", qid))
+
+
+
+# comparison
+install.packages("fuzzyjoin")
+library(fuzzyjoin)
+
+tolerance <- 5e4
+
+# Filter inversion segments only
+grep("NC_003197.2", all_delta_filt_files)
+NC_003197.2
+all_delta_filt_files[1]
+
+inversions <- 
+  filtered_combined_delta %>%
+  filter(strand == "-") %>%
+  dplyr::rename(start = rs, end = re)
+
+# Prepare SSRs for join
+SSRs_prepped <- 
+  SSRs %>% 
+  select(rid, qid, start, end, width, variant_specific)
+
+comparison <- 
+  fuzzy_inner_join(
+    SSRs_prepped,
+    inversions,
+    by = c(
+      "rid" = "rid",
+      "qid" = "qid",
+      "start" = "start",
+      "end" = "end"
+    ),
+    match_fun = list(`==`, `==`, 
+      function(x, y) abs(x - y) <= tolerance | (x <= y & x >= y),   # start overlap or within tolerance
+      function(x, y) abs(x - y) <= tolerance | (x >= y & x <= y)    # end overlap or within tolerance
+    )
+  )
+
+matched <- comparison %>%
+  dplyr::select(
+    rid = rid.x, qid = qid.x,
+    start_SSRs = start.x, end_SSRs = end.x,
+    start_inversion = start.y, end_inversion = end.y,
+    width, variant_specific
+  )%>%
+  mutate(
+    start_diff = abs(start_SSRs - start_inversion),
+    end_diff = abs(end_SSRs - end_inversion)
+  )
+
+unmatched_SSRs <- SSRs_prepped %>%
+  anti_join(matched, by = c("rid" = "rid", "qid" = "qid", "start" = "start_SSRs", "end" = "end_SSRs"))
+
+# Inversions not matched in SSRs
+unmatched_inversions <- inversions %>%
+  anti_join(matched, by = c("rid" = "rid", "qid" = "qid", "start" = "start_inversion", "end" = "end_inversion"))
+
+expanded_clusters <- 
+  cluster_coords %>%
+  separate_rows(accessions, sep = ",\\s*") 
+
+
+
+
+# Summary counts
+nrow(SSRs_prepped)
+nrow(inversions)
+nrow(matched)
+nrow(unmatched_SSRs)
+nrow(unmatched_inversions)
+
+
+unmatched_inversions
+SSRs
+
+delta_table <- 
+  read_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003197.2_filtered.delta")
+
+inversions %>% filter(qid=="NC_003197.2")
+
+tt <- 
+delta_all_SVs(
+      delta_file = "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003198.1_filtered.delta", 
+      unfiltered_delta_file = "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/unfiltered/NZ_CP148880.1_v_NC_003198.1.delta",
+      species_name = species_name
+  )
+plot_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003198.1_filtered.delta")
+
+
+tt %>% filter(variant=="Structural rearrangement")
+
+tt %>%
+  filter(variant=="Structural rearrangement")
+
+
+read_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003197.2_filtered.delta") %>% delta_all_SVs
+
+
+read_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003197.2_filtered.delta") %>% filter_delta
+
+```
+
+
+```{r}
+
+
+best_identity_ss <- 
+    best_identity %>%
+    group_by(cluster_id) %>% 
+    arrange(desc(identity)) %>%
+    dplyr::slice(1:20) %>%
+    ungroup
+
+snp_fa_dir <- 
+    sprintf(
+        "%s/fa", snp_dir
+    )
+if(!(dir.exists(snp_fa_dir)) ){(dir.create(snp_fa_dir))}
+
+pbmclapply(
+    1:nrow(best_identity_ss_2),
+    function(i){
+        file.copy(
+            list.files(
+                sync_dir, pattern = best_identity_ss$accessions[i],
+                full.names = T
+            ),
+            sprintf(
+                "%s/%s.fa", snp_fa_dir,  best_identity_ss$accessions[i]
+            )
+        )
+        
+    }
+)
+
+sync_dir
+most_related
+snp_dir %>% list.files()
+
+list.files("processing/sync/Gamma/Salmonella_enterica/1v_the_rest")
+
+```
+
+
+
+
+```{bash}
+parsnp  -p 6 \
+    -r processing/sync/Gamma/Salmonella_enterica/NZ_CP148880.1.txt \
+    -c \
+    -d processing/sync/Gamma/Salmonella_enterica/1v_the_rest \
+    -o processing/snp/Gamma/Salmonella_enterica
+```
+
+
+
+```{r}
+#install.packages("phytools")
+library(phytools)
+
+list.files("processing/snp/Gamma/Salmonella_enterica")
+
+s_tree5 <- 
+    read.tree("processing/snp/Gamma/Salmonella_enterica/parsnp.tree")
+
+s_tree5$tip.label <- 
+    sub(".ref", "", s_tree5$tip.label)
+s_tree5$tip.label <- 
+    sub(".txt", "", s_tree5$tip.label)
+
+
+
+plot(s_tree5)
+
+
+s_tree_phy <- midpoint_root(s_tree5)
+
+
+s_tree_phy$edge.length <- NULL
+
+plot(
+    s_tree_phy,
+     show.tip.label = FALSE, type = "f"
+    )
+
+
+s_tree_pruned <- 
+    drop.tip(s_tree, "NZ_CP085969.1")
+plot(s_tree_pruned)
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+SRs <- 
+  main_svs %>%
+  filter(
+    variant == "Structural rearrangement", 
+    !is.na(width),
+    variant_specific!= "none"
+    )
+# symmetric
+SSRs <- 
+  SRs %>%
+  filter(
+    variant_specific == "symmetric"
+    )
+
+
+
+
+annotated_SRs <- 
+  assign_kde_peaks(SSRs)
+
+
+
+
+
+
+annotated_SRs %>% 
+  group_by(mode_group) %>%
+  summarise(
+    acc = qid[1],
+    mode_mean_bp = mode_mean_bp[1]
+  )
+
+
+read_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_011149.1_filtered.delta") %>% plot_delta
+read_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NZ_CP007639.1_filtered.delta") %>% plot_delta
+
+read_delta(
+  "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003198.1_filtered.delta"
+  ) %>% plot_delta
+
+
+delta_plot("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003198.1_filtered.delta")
+
+
+delta_all_SVs(
+  delta_file = "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003197.2_filtered.delta", 
+  unfiltered_delta_file = "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/unfiltered/NZ_CP148880.1_v_NC_003197.2.delta",
+  species_name = species_name
+  
+  )
+
+
+```
+
+
+
+```{r}
+
+```
+
+
+
+```{r}
+install.packages("mclust")
+library(mclust)
+recursive_gmm <- 
+    function(
+        x, max_depth = 5, depth = 0, min_n = 100, 
+        G_range = 1:6, proportion_cutoff = 0.1, spread_ratio_cutoff = 1.0
+    ) {
+        if (length(x) < min_n || depth >= max_depth) {
+            return(tibble())
+        }
+        
+        fit <- Mclust(x, G = G_range, modelNames = "V")
+        means <- fit$parameters$mean
+        sds   <- sqrt(fit$parameters$variance$sigmasq)
+        props <- fit$parameters$pro
+        
+        summary_table <- tibble(
+            depth = depth,
+            submode = paste0("D", depth, ".", seq_along(means)),
+            mean_log10 = round(means, 3),
+            mean_bp = round(10^means),
+            sd_log10 = round(sds, 3),
+            sd_bp = round((10^(means + sds)) - (10^means)),
+            proportion = round(props, 3),
+            n = length(x)
+        )
+        
+        nested_tables <- list(summary_table)
+        
+        for (i in seq_along(means)) {
+            mean_log10 <- means[i]
+            sd_log10 <- sds[i]
+            prop <- props[i]
+            mean_bp <- 10^mean_log10
+            sd_bp <- (10^(mean_log10 + sd_log10)) - mean_bp
+            
+            if (prop > proportion_cutoff && (sd_bp / mean_bp) > spread_ratio_cutoff) {
+                idx <- abs(x - mean_log10) < 2 * sd_log10
+                if (sum(idx) >= min_n) {
+                    nested_result <- recursive_gmm(
+                        x[idx], max_depth = max_depth, depth = depth + 1,
+                        min_n = min_n, G_range = 1:3
+                    )
+                    nested_tables <- append(nested_tables, list(nested_result))
+                }
+            }
+        }
+        
+        bind_rows(nested_tables)
+    }
+#install.packages("pracma")
+library(pracma)  
+assign_kde_peaks <- function(df, core_thresh = 0.1, shoulder_thresh = 0.3) {
+    if (nrow(df) < 5 || !"width" %in% names(df)) return(NULL)
+    
+    df <- df %>%
+        filter(!is.na(width)) %>%
+        mutate(log_length = log10(width + 1))
+    
+    kde <- density(df$log_length, bw = "nrd0")
+    peaks <- findpeaks(kde$y, minpeakdistance = 5)
+    if (is.null(peaks)) return(NULL)
+    
+    peak_pos <- kde$x[peaks[, 2]]
+    peak_ids <- paste0("Peak_", seq_along(peak_pos))
+    
+    df %>%
+        rowwise() %>%
+        mutate(
+            nearest = which.min(abs(log_length - peak_pos)),
+            mode_group = peak_ids[nearest],
+            mode_mean_log = peak_pos[nearest],
+            mode_mean_bp  = 10^mode_mean_log,
+            log_distance  = abs(log_length - mode_mean_log),
+            zone = case_when(
+                log_distance <= core_thresh ~ "core",
+                log_distance <= shoulder_thresh ~ "shoulder",
+                TRUE ~ "outlier"
+            ),
+            n_modes = length(peak_pos)
+        ) %>%
+        ungroup()
+}
+
+msv2 <- 
+  main_svs %>%
+  filter(
+    variant_specific!="none"
+  ) 
+SV_counts<- 
+  main_svs %>%
+  filter(
+    variant_specific!="none"
+  ) %>%
+  count(variant)
+
+SV_counts
+
+### duplications
+dups <- 
+  main_svs %>%
+  filter(variant == "Duplication", !is.na(width))
+
+
+log_widths <- log10(dups$width)
+dups_fit <- Mclust(log_widths, G = 1:10)
+plot(fit, what = "BIC")
+
+dups_gmm <- recursive_gmm(log_widths, G = 1:9)
+print(dups_gmm)
+
+### structural rearrangements
+SRs <- 
+  main_svs %>%
+  filter(
+    variant == "Structural rearrangement", 
+    !is.na(width),
+    variant_specific!= "none"
+    )
+# symmetric
+SSRs <- 
+  SRs %>%
+  filter(
+    variant_specific == "symmetric"
+    )
+  
+
+SR_lw <- log10(SSRs$width)
+SR_fit <- Mclust(SR_lw, G = 1:20)
+print(SR_fit)
+
+plot(SR_fit, what = "BIC")
+
+
+(SRs$width)  %>% density %>% plot
+
+SRs
+
+SR_gmm <- 
+  recursive_gmm(
+    log10(SSRs$width),
+    min_n = 20,
+    spread_ratio_cutoff = 0.3,
+    proportion_cutoff = 0.03
+    )
+  #recursive_gmm(SR_lw, G = 1:10)
+print(SR_gmm) 
+
+
+annotated_SRs %>% 
+  summarise(
+    prop = 
+      mode_mean_bp/
+      (main_svs %>% filter(variant_specific=="none") %>% pull(end) %>% mean)
+  )
+
+
+all_delta_filt_files %>% grep(., "NZ_CP013222.1")
+
+grep("NZ_CP013222.1", all_delta_filt_files, value = T) %>% plot_delta
+
+
+
+annotated_SRs <- 
+  assign_kde_peaks(SSRs)
+
+annotated_SRs %>% group_by(mode_group) %>% 
+  summarise(
+    counts = n(),
+    acc = qid[1]
+    )
+
+
+
+
+
+unique_peaks <- unique(annotated_SRs$mode_mean_log)
+dens <- density(log10(SSRs$width), bw = "nrd0")
+
+# Dataframes for ggplot
+df_dens <- data.frame(
+    width = dens$x,
+    density = dens$y
+)
+unique_peaks_bp <- unique(annotated_SRs$mode_mean_bp)
+
+
+peaks_df <- data.frame(
+    width = unique_peaks_bp,
+    density = peak_ys
+)
+
+peak_summary <- 
+  annotated_SRs %>%
+  group_by(mode_group, mode_mean_bp, zone) %>%
+  summarise(n = n()) %>%
+  tidyr::pivot_wider(
+      names_from = zone,
+      values_from = n,
+      values_fill = 0
+  ) %>%
+  mutate(total = core + shoulder + outlier) %>%
+  arrange(desc(total))
+
+
+annotated_SRs %>% count(mode_group)
+annotated_SRs %>% filter(mode_group=="Peak_6")
+
+
+ggplot(df_dens, aes(x = width, y = density)) +
+    geom_line() +
+    geom_vline(data = peaks_df, aes(xintercept = width), color = "red", linetype = "dashed") +
+    geom_point(data = peaks_df, aes(x = width, y = density), color = "red", size = 2) +
+    scale_x_continuous(trans = "log10", labels = scales::comma) + # for better axis if values are large
+    labs(
+        x = "SV width (bp)",
+        y = "Density",
+        title = "KDE of SV width (bp) with Detected Peaks"
+    ) +
+    theme_minimal()
+
+# Plot density
+plot(dens, 
+     main = "KDE of log10(SV width) with Detected Peaks",
+     xlab = "log10(SV width [bp])")
+
+
+peak_summary <- 
+  annotated_SRs %>%
+  group_by(mode_group, mode_mean_bp, zone) %>%
+  summarise(n = n()) %>%
+  tidyr::pivot_wider(
+      names_from = zone,
+      values_from = n,
+      values_fill = 0
+  ) %>%
+  mutate(total = core + shoulder + outlier) %>%
+  arrange(desc(total))
+
+# View the table
+print(peak_summary)
+
+# Add vertical lines for peaks
+abline(v = unique_peaks, col = "red", lty = 2, lwd = 2)
+
+# Optionally, mark peaks with points
+peak_ys <- approx(dens$x, dens$y, xout = unique_peaks)$y
+points(unique_peaks, peak_ys, col = "red", pch = 19)
+
+
+dens <- density(log10(SRs$width), bw = "nrd0")
+
+# Find unique peak positions
+unique_peaks <- unique(annotated_SRs$mode_mean_log)
+
+# Plot density
+plot(dens, 
+     main = "KDE of log10(SV width) with Detected Peaks",
+     xlab = "log10(SV width [bp])")
+
+# Add vertical lines for peaks
+abline(v = unique_peaks, col = "red", lty = 2, lwd = 2)
+
+# Optionally, mark peaks with points
+peak_ys <- approx(dens$x, dens$y, xout = unique_peaks)$y
+points(unique_peaks, peak_ys, col = "red", pch = 19)
+
+dens <- density(SRs$width)
+plot(dens)
+abline(v = 10^gmm_results$mean_log10, col = "red", lty = 2)
+
+log_widths <- log10(dups$width)
+dups_fit <- Mclust(log_widths, G = 1:10)
+plot(fit, what = "BIC")
+
+dups_gmm <- recursive_gmm(log_widths, G = 1:9)
+print(dups_gmm)
+
+
+
+
+
+SV_counts$variant[1]
+
+main_svs %>%
+  filter(variant==SV_counts$variant[1])
+
+
+Mclust(log_widths, G = 1:9)$G
+
+# Subset duplications
+
+
+dups %>% filter(is.na(width))
+
+dups$width %>% summary
+
+# Log10-transform the SV lengths
+
+
+
+
+
+
+gmm_results$G
+
+main_svs %>%
+  filter(
+    variant_specific!="none"
+    #variant=="Structural rearrangement"
+    ) %>% count(variant)
+  
+
+
+dup_tib <- 
+  main_svs %>% 
+  filter(variant=="Duplication")
+
+
+main_svs %>% filter( variant_specific!="none", variant=="Structural rearrangement")
+
+
+delta_all_SVs(
+  delta_file = "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003197.2_filtered.delta", 
+  unfiltered_delta_file = "processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/unfiltered/NZ_CP148880.1_v_NC_003197.2.delta",
+  species_name = species_name
+  
+  )
+
+
+all_delta_unfilt_files
+
+read_delta("processing/alignment/Gamma/Salmonella_enterica/1v_the_rest/NZ_CP148880.1_v_NC_003197.2_filtered.delta") %>% plot_delta
+
+```
+
+
+

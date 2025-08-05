@@ -1412,7 +1412,7 @@ delta_duplications <-
             duplication_found = FALSE
           )
         )
-        
+        #)
       } else {
         edges <- common %>%
           filter(queryHits < subjectHits) %>%
@@ -1532,7 +1532,8 @@ delta_translocations <-
 
 
 
-delta_structural_rearrangements_prev <- function(delta_table) {
+delta_structural_rearrangements_prev <- 
+  function(delta_table) {
   if (is.character(delta_table)) {
     delta_table <- read_delta(delta_table)
   }
@@ -1869,97 +1870,57 @@ delta_substructural_inversions <-
       ) 
     return(invs)
   }
-
-function(
-    delta_table
-){
-  
-  if (is.character(delta_table)){
-    delta_table <- 
-      read_delta(delta_table)
-  }
-  
-  d2 <- 
-    delta_table %>%
-    rowwise() %>%
-    mutate(
-      qs2 = min(c(qs, qe)),
-      qe2 = max(c(qs, qe))
-    ) %>% 
-    ungroup()
-  
-  ## segment alignments
-  fd <- 
-    #filter_delta(delta_file) %>%
-    filter_delta(d2) %>%
-    mutate(
-      segment = rleid(strand),
-      # segments = length(rle(strand)$lengths),
-      # invs = sum(rle(strand)$values=="-")
-    ) %>%
-    filter(
-      segment != min(segment), 
-      segment != max(segment), 
-      meanlen >= 1e4
-    ) 
-  
-  events <- 
-    list()
-  
-  if (nrow(fd)==0){
+delta_structural_rearrangements_prev2 <- 
+  function(
+      delta_table
+  ){
     
-    events <- 
-      tibble()
+    if (is.character(delta_table)){
+      delta_table <- 
+        read_delta(delta_table)
+    }
     
-  } else{
-    fd2 <- 
-      fd %>%
+    d2 <- 
+      delta_table %>%
+      rowwise() %>%
       mutate(
         qs2 = min(c(qs, qe)),
         qe2 = max(c(qs, qe))
-      ) %>%
+      ) %>% 
       ungroup()
-    fd3 <- 
-      fd2 %>%
-      group_by(segment) %>%
-      summarise(
-        rid = unique(rid),
-        qid = unique(qid),
-        strand   = unique(strand),
-        rs       = min(rs), re = max(re),
-        qs       = if_else(strand=="+", min(qs2), max(qs2)),
-        qe       = if_else(strand=="+", max(qe2), min(qe2)),
-        X_dist   = round(mean(X_dist)),
-        meanlen  = sum(meanlen),
-        rlen     = unique(rlen), qlen = unique(qlen),
-        rmp = round((rs + re) / 2),
-        qmp = round((qs + qe) / 2),
-        mid = round((rmp + qmp) / 2),
-        .groups  = "drop"
+    
+    ## segment alignments
+    fd <- 
+      #filter_delta(delta_file) %>%
+      filter_delta(d2) %>%
+      mutate(
+        segment = rleid(strand),
+        # segments = length(rle(strand)$lengths),
+        # invs = sum(rle(strand)$values=="-")
+      ) %>%
+      filter(
+        segment != min(segment), 
+        segment != max(segment), 
+        meanlen >= 1e4
       ) 
     
+    events <- 
+      list()
     
-    segdiff <- 
-      fd3 %>%
-      mutate(segdiff = segment-lag(segment, default = 1)) %>%
-      pull(segdiff)
-    
-    if (any(segdiff>1)) {
+    if (nrow(fd)==0){
+      
       events <- 
-        fd3# %>%
-      # dplyr::select(
-      #     rid, qid,# rsp, rep, qsp, qep, 
-      #     strand, segment,
-      #     X_dist, meanlen, 
-      #     midpoint, ms, me, rlen, qlen,
-      #     rs, re, qs, qe
-      #     #r_midprop, q_midprop
-      # ) %>%
-      # ungroup()
+        tibble()
       
     } else{
-      
-      fd2_props <- 
+      fd2 <- 
+        fd %>%
+        mutate(
+          qs2 = min(c(qs, qe)),
+          qe2 = max(c(qs, qe))
+        ) %>%
+        ungroup()
+      fd3 <- 
         fd2 %>%
         group_by(segment) %>%
         summarise(
@@ -1976,124 +1937,164 @@ function(
           qmp = round((qs + qe) / 2),
           mid = round((rmp + qmp) / 2),
           .groups  = "drop"
-        )  %>%
-        ungroup() %>%
-        arrange(segment) %>%
-        filter(
-          strand=="-" |
-            (
-              (lag(strand, default = "+")=="-") & 
-                (lead(strand, default = "+")=="-")
-            )
-        )
-      seg_ids <- 
-        sort(unique(fd2_props$segment))
-      inner_seg <- 
-        seg_ids[ ceiling(length(seg_ids)/2) ]
-      # inner_seg <- 
-      #     median(unique(fd2_props$segment))
+        ) 
       
-      if (nrow(fd2_props)==1){
-        middle_seg_row <- 
-          fd2_props %>%
-          filter(
-            segment==inner_seg #median(segment)
-          ) %>%
-          mutate(
-            ms =
-              round(mean(c(rs, qs))),
-            me = 
-              round(mean(c(re, qe))),
-            segment = as.character(segment)
-          )
+      
+      segdiff <- 
+        fd3 %>%
+        mutate(segdiff = segment-lag(segment, default = 1)) %>%
+        pull(segdiff)
+      
+      if (any(segdiff>1)) {
         events <- 
-          middle_seg_row
-      } else {
+          fd3# %>%
+        # dplyr::select(
+        #     rid, qid,# rsp, rep, qsp, qep, 
+        #     strand, segment,
+        #     X_dist, meanlen, 
+        #     midpoint, ms, me, rlen, qlen,
+        #     rs, re, qs, qe
+        #     #r_midprop, q_midprop
+        # ) %>%
+        # ungroup()
         
-        middle_seg_row <- 
-          fd2_props %>%
+      } else{
+        
+        fd2_props <- 
+          fd2 %>%
+          group_by(segment) %>%
+          summarise(
+            rid = unique(rid),
+            qid = unique(qid),
+            strand   = unique(strand),
+            rs       = min(rs), re = max(re),
+            qs       = if_else(strand=="+", min(qs2), max(qs2)),
+            qe       = if_else(strand=="+", max(qe2), min(qe2)),
+            X_dist   = round(mean(X_dist)),
+            meanlen  = sum(meanlen),
+            rlen     = unique(rlen), qlen = unique(qlen),
+            rmp = round((rs + re) / 2),
+            qmp = round((qs + qe) / 2),
+            mid = round((rmp + qmp) / 2),
+            .groups  = "drop"
+          )  %>%
+          ungroup() %>%
+          arrange(segment) %>%
           filter(
-            segment==inner_seg #median(segment)
-          ) %>%
-          mutate(
-            ms =
-              round(mean(c(rs, qs))),
-            me = 
-              round(mean(c(re, qe))),
-            segment = as.character(segment)
+            strand=="-" |
+              (
+                (lag(strand, default = "+")=="-") & 
+                  (lead(strand, default = "+")=="-")
+              )
           )
+        seg_ids <- 
+          sort(unique(fd2_props$segment))
+        inner_seg <- 
+          seg_ids[ ceiling(length(seg_ids)/2) ]
+        # inner_seg <- 
+        #     median(unique(fd2_props$segment))
         
-        outer_segs <- 
-          fd2_props %>%
-          filter(segment !=inner_seg) #median(segment)) 
-        
-        possible_outers <- 
-          nrow(outer_segs) %/% 2
-        
-        outer_events <- 
-          list()
-        for (j in 1:possible_outers){
-          outer_events[[j]] <- 
-            fd2_props %>% 
+        if (nrow(fd2_props)==1){
+          middle_seg_row <- 
+            fd2_props %>%
             filter(
-              segment %in% c(inner_seg-j, inner_seg+j)
+              segment==inner_seg #median(segment)
             ) %>%
             mutate(
-              expected_nested_mid = 
-                mean(c(mid, lag(mid)), na.rm = TRUE),
-              mid_diff = 
-                abs(expected_nested_mid -
-                      middle_seg_row$mid),
-              nested_group = 
-                ifelse(
-                  mid_diff <
-                    5e5,
-                  c(1,1),
-                  c(1,2)
-                )
-            ) %>%
-            group_by(nested_group) %>%
-            summarise(
-              rid = unique(rid),
-              qid = unique(qid),
-              strand= unique(strand),
-              segment = paste(segment, collapse = ","),
-              X_dist = mean(X_dist),
               ms =
-                mean(c(min(rs), min(qs))),
-              me =
-                mean(c(max(re), max(qe))),
-              rs = 
-                min(rs),
-              re = 
-                max(re),
-              qs = 
-                min(qs),
-              qe = 
-                max(qe),
-              meanlen = 
-                me-ms,
-              midpoint = 
-                (ms+me)/2,
-              rlen = unique(rlen),
-              qlen = unique(qlen)
+                round(mean(c(rs, qs))),
+              me = 
+                round(mean(c(re, qe))),
+              segment = as.character(segment)
             )
+          events <- 
+            middle_seg_row
+        } else {
+          
+          middle_seg_row <- 
+            fd2_props %>%
+            filter(
+              segment==inner_seg #median(segment)
+            ) %>%
+            mutate(
+              ms =
+                round(mean(c(rs, qs))),
+              me = 
+                round(mean(c(re, qe))),
+              segment = as.character(segment)
+            )
+          
+          outer_segs <- 
+            fd2_props %>%
+            filter(segment !=inner_seg) #median(segment)) 
+          
+          possible_outers <- 
+            nrow(outer_segs) %/% 2
+          
+          outer_events <- 
+            list()
+          for (j in 1:possible_outers){
+            outer_events[[j]] <- 
+              fd2_props %>% 
+              filter(
+                segment %in% c(inner_seg-j, inner_seg+j)
+              ) %>%
+              mutate(
+                expected_nested_mid = 
+                  mean(c(mid, lag(mid)), na.rm = TRUE),
+                mid_diff = 
+                  abs(expected_nested_mid -
+                        middle_seg_row$mid),
+                nested_group = 
+                  ifelse(
+                    mid_diff <
+                      5e5,
+                    c(1,1),
+                    c(1,2)
+                  )
+              ) %>%
+              group_by(nested_group) %>%
+              summarise(
+                rid = unique(rid),
+                qid = unique(qid),
+                strand= unique(strand),
+                segment = paste(segment, collapse = ","),
+                X_dist = mean(X_dist),
+                ms =
+                  mean(c(min(rs), min(qs))),
+                me =
+                  mean(c(max(re), max(qe))),
+                rs = 
+                  min(rs),
+                re = 
+                  max(re),
+                qs = 
+                  min(qs),
+                qe = 
+                  max(qe),
+                meanlen = 
+                  me-ms,
+                midpoint = 
+                  (ms+me)/2,
+                rlen = unique(rlen),
+                qlen = unique(qlen)
+              )
+          }
+          inv_summary <- 
+            bind_rows(
+              middle_seg_row,
+              bind_rows(outer_events)
+            )
+          
+          events <- 
+            inv_summary 
         }
-        inv_summary <- 
-          bind_rows(
-            middle_seg_row,
-            bind_rows(outer_events)
-          )
         
-        events <- 
-          inv_summary 
       }
-      
     }
+    
+    return(events)
   }
-  
-  return(events)
-}
 
 
 

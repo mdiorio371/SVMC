@@ -145,6 +145,7 @@ species_variable_names <-
         "sync_dir", "identity_dir",
         "oriC_dir",
         "alignment_dir", "r_vars_dir", "results_dir", 
+        "snp_dir",
         #"disparities_dir",# "c01_dir",
         #"subset_dir",
         #"breakpoint_dir", 
@@ -248,11 +249,6 @@ assembly_table <-
 
 load_arranged_assemblies <- 
   function(species_name, ncbi_table, sync_dir, n = 200){
-
-    
-   
-     
-    
     
     positions <- 
       list()
@@ -435,7 +431,7 @@ pbmclapply(
   1:nrow(Refs_vs_Qrys),
   function(i){
     generate_nucmer_commands(
-      genome_matrix = Refs_vs_Qrys, delta_dir = alignment_dir_ava, sync_dir
+      genome_matrix = Refs_vs_Qrys, delta_dir = alignment_dir_rvq, sync_dir
       )[i] %>% system()
   }, mc.cores = 6
 )
@@ -444,7 +440,7 @@ pbmclapply(
   1:nrow(One_vs_all),
   function(i){
     generate_nucmer_commands(
-      genome_matrix = One_vs_all, delta_dir = alignment_dir_ava, sync_dir
+      genome_matrix = One_vs_all, delta_dir = alignment_dir_1va, sync_dir
       )[i] %>% system()
   }, mc.cores = 6
 )
@@ -541,9 +537,9 @@ benchmark_alignments <-
 benchmark_ava <- 
   benchmark_alignments(All_vs_all_m, alignment_dir_ava, sync_dir, "All-vs-All")
 benchmark_rvq <- 
-  benchmark_alignments(Refs_vs_Qrys, alignment_dir_ava, sync_dir, "Ref-vs-Query")
+  benchmark_alignments(Refs_vs_Qrys, alignment_dir_rvq, sync_dir, "Ref-vs-Query")
 benchmark_1va <- 
-  benchmark_alignments(One_vs_all, alignment_dir_ava, sync_dir, "1-vs-All")
+  benchmark_alignments(One_vs_all, alignment_dir_1va, sync_dir, "1-vs-All")
 
 benchmark_rvq <- 
   benchmark_rvq %>%

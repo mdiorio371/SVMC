@@ -1,0 +1,861 @@
+---
+title: "Ch2"
+output: html_document
+date: "2025-07-10"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+### chapter 2 
+
+```{r}
+
+species_table <- 
+  ncbi_table %>%
+  filter(
+    species==sub("_", " ", species_name)
+  )
+
+assembly_table <- 
+  pbmclapply(
+    1:200,
+    function(i){
+      #for (i in 1:200){
+      assembly_path <- 
+        (species_table %>% pull(ftp_path))[i]
+      
+      fasta_path <- 
+        sprintf(
+          "%s/%s_genomic.fna.gz",
+          assembly_path, 
+          gsub(".*/", "", assembly_path)
+          )
+      
+      gff_path <- 
+        sprintf(
+          "%s/%s_genomic.gff.gz",
+          assembly_path,
+          gsub(".*/", "", assembly_path)
+          )
+      
+      fna_exists <- 
+              file_exists_at_url(fasta_path)
+      gff_exists <- 
+              file_exists_at_url(gff_path)
+
+      dnaA_table <- 
+        dnaA_from_gff(
+          gff_path
+          )
+      if (!fna_exists | !gff_exists){
+        position_tib <- 
+          tibble( 
+            asm_name = 
+              basename(assembly_path),
+            note = "missing fasta/gff"
+                  )
+      } else {
+        position_tib <-   
+          dnaA_sync(fasta_path, dnaA_table, sync_dir)
+      }
+      
+      return(position_tib)
+    }
+      
+  ) %>%
+  bind_rows()
+
+assembly_table %>% filter(accession=="NZ_CP148880.1") %>% pull(out_file) %>% file.exists()
+
+
+
+dnaA_positions <- 
+  load_arranged_assemblies(species_name, ncbi_table, sync_dir, n = 200)
+
+
+set.seed(123)
+genome_subset <- 
+  assembly_table %>%
+  sample_n(20)
+
+accessions <- 
+  genome_subset %>% pull(accession)
+
+```
+
+
+
+Strategies for pairwise alignment, performance and resolution
+
+## identities for 1 vs all
+```{r}
+id_dir <- 
+  sprintf("%s/ss20", identity_dir)
+
+if (!dir.exists(id_dir)){dir.create(id_dir)}
+
+species_identities <- 
+    get_pairwise_identities(
+        sync_dir = sync_dir, 
+        id_dir = 
+          id_dir, 
+        species_table = genome_subset, 
+        species_name
+    )
+
+sampled_id_table <- 
+    species_identities$id_dists %>%
+    arrange(Sequence_mean_distance)
+
+species_identities$mash_plot
+```
+
+
+The different strategies
+
+
+
+```{r}
+
+All_vs_all_m <- 
+  t(combn(accessions, 2)) %>%
+  `colnames<-`(c("ref", "qry"))
+
+
+Refs_vs_Qrys <- 
+  expand_grid(
+    ref = accessions[1:round(length(accessions)/2)], 
+    qry = accessions[(round(length(accessions)/2)+1):length(accessions)]
+    )
+
+most_related <- 
+  sampled_id_table$Sequence[1]
+
+One_vs_all <- 
+  tibble(
+    ref = most_related,
+    qry = accessions[accessions != most_related]
+    ) %>% 
+  as.matrix()%>%
+  `colnames<-`(c("ref", "qry"))
+
+alignment_dir_ava <- 
+  sprintf(
+    "%s/all_vs_all", alignment_dir
+  )
+alignment_dir_rvq <- 
+  sprintf(
+    "%s/refs_vs_qrys", alignment_dir
+  )
+alignment_dir_1va <- 
+  sprintf(
+    "%s/one_vs_all", alignment_dir
+  )
+
+sync_dir %>% list.files
+
+strategies <- 
+  list(
+    "All-vs-All" = list(
+    matrix = All_vs_all_m,
+    dir = alignment_dir_ava
+  ),
+  "Ref-vs-Query" = list(
+    matrix = Refs_vs_Qrys,
+    dir = alignment_dir_rvq
+  ),
+  "1-vs-All" = list(
+    matrix = One_vs_all,
+    dir = alignment_dir_1va
+  )
+)
+
+
+
+## benchmarks 
+benchmark_ava <- 
+  benchmark_alignments(All_vs_all_m, alignment_dir_ava, sync_dir, "All-vs-All")
+benchmark_rvq <- 
+  benchmark_alignments(Refs_vs_Qrys, alignment_dir_rvq, sync_dir, "Ref-vs-Query")
+benchmark_1va <- 
+  benchmark_alignments(One_vs_all, alignment_dir_1va, sync_dir, "1-vs-All")
+
+
+
+
+
+all_benchmarks <- bind_rows(benchmark_ava, benchmark_rvq, benchmark_1va)
+
+all_benchmarks %>%
+  group_by(strategy) %>%
+  summarise(
+    total_runtime_sec = sum(runtime_sec, na.rm = TRUE),
+    mean_runtime_sec = mean(runtime_sec, na.rm = TRUE),
+    sd_runtime_sec   = sd(runtime_sec, na.rm = TRUE),
+    Alignments          = n(),
+  )
+
+saveRDS(
+  all_benchmarks,
+  sprintf("%s/all_benchmarks.rds", r_vars_dir)
+)
+
+
+
+
+
+### resolutions
+
+alignment_directory <- 
+  alignment_dir_ava
+
+list.files(alignment_dir_1va) %>% length()
+
+
+ava_resolution <- 
+   get_all_SVs(alignment_dir_ava)
+rvq_resolution <- 
+   get_all_SVs(alignment_dir_rvq)
+resolution_1va <- 
+   get_all_SVs(alignment_dir_1va)
+
+
+res_list <- 
+  list(
+    "all_vs_all"    = ava_resolution,
+    "ref_vs_query"  = rvq_resolution,
+    "one_vs_all"    = resolution_1va
+)
+
+
+saveRDS(res_list, sprintf("%s/res_list.rds", r_vars_dir))
+
+list.files(alignment_dir_rvq)
+list.files(alignment_dir_1va)
+
+ava_resolution
+rvq_resolution
+resolution_1va
+
+
+
+###inversion recurrence
+```
+
+
+
+```{r}
+
+akg2 <- 
+  assign_reciprocal_overlap_groups(r1v2, overlap_thresh = 0.8)
+  
+
+r1v2 %>%
+  mutate( 
+    recurrence_group = membership
+  ) %>%
+  add_count(recurrence_group)
+
+
+recurrence_summary <- akg %>%
+  group_by(recurrence_group) %>%
+  summarise(n_SVs = n()) %>%
+  mutate(category = ifelse(n_SVs > 1, "Recurring", "Singleton")) %>%
+  count(category, name = "n_groups") %>%
+  mutate(percent = round(100 * n_groups / sum(n_groups), 1))
+
+
+sv_recurrence_summary <- akg %>%
+  group_by(recurrence_group) %>%
+  mutate(n_SVs = n()) %>%
+  ungroup() %>%
+  mutate(category = ifelse(n_SVs > 1, "Recurring", "Singleton")) %>%
+  count(category, name = "n_SVs") %>%
+  mutate(percent = round(100 * n_SVs / sum(n_SVs), 1))
+
+print(sv_recurrence_summary)
+
+ggplot(sv_recurrence_summary, aes(x = category, y = n_SVs, fill = category)) +
+  geom_col(width = 0.7) +
+  labs(
+    x = "SV Recurrence Type",
+    y = "Number of SVs",
+    title = "SV Recurrence: Recurring vs. Singleton"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Recurring" = "#4575b4", "Singleton" = "#d73027")) +
+  theme(legend.position = "none")
+
+group_size_table <- akg %>%
+  group_by(recurrence_group) %>%
+  summarise(n_SVs = n()) %>%
+  ungroup()
+
+group_size_table %>% arrange(desc(n_SVs))
+
+
+ggplot(group_size_table, aes(x = n_SVs)) +
+  geom_histogram(binwidth = 1, fill = "#74add1", color = "grey30") +
+  labs(
+    x = "SVs per Recurrence Group",
+    y = "Number of Groups",
+    title = "Distribution of Recurrence Group Sizes"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+
+
+```{r}
+assign_reciprocal_overlap_groups <- 
+  function(
+    sv_table, overlap_thresh = 0.8, 
+    start_col = "start", end_col = "end"
+    ) {
+    # Extract ranges
+    sv_ranges <- IRanges(start = sv_table[[start_col]], end = sv_table[[end_col]])
+  
+    # Find overlaps
+    hits <- findOverlaps(sv_ranges, sv_ranges, type = "any")
+    
+    # Reciprocal overlap function
+    reciprocal_overlap <- function(i, j) {
+      ov_start <- max(sv_table[[start_col]][i], sv_table[[start_col]][j])
+      ov_end   <- min(sv_table[[end_col]][i],   sv_table[[end_col]][j])
+      ov_len   <- max(0, ov_end - ov_start + 1)
+      len_i    <- sv_table[[end_col]][i] - sv_table[[start_col]][i] + 1
+      len_j    <- sv_table[[end_col]][j] - sv_table[[start_col]][j] + 1
+      c(ov_len / len_i, ov_len / len_j)
+    }
+    
+    # Build edges for the overlap graph
+    edges <- vector("list", 0)
+    for (k in seq_along(hits@from)) {
+      i <- hits@from[k]
+      j <- hits@to[k]
+      if (i < j) {
+        ro <- reciprocal_overlap(i, j)
+        if (all(ro >= overlap_thresh)) {
+          edges <- append(edges, list(c(i, j)))
+        }
+      }
+    }
+    
+    # Build graph
+    all_ids <- seq_len(nrow(sv_table))
+    g <- igraph::make_empty_graph(n = length(all_ids), directed = FALSE)
+    if (length(edges) > 0) {
+      g <- igraph::add_edges(g, unlist(edges))
+    }
+    
+    # Connected components: group assignment
+    g_membership <- components(g)$membership
+    sv_table$recurrence_group <- g_membership
+    
+    return(sv_table)
+    }
+```
+
+
+
+```{r}
+assign_gmm_submodes <- function(df) {
+  n <- nrow(df)
+  if(n < 10) return(rep(NA_character_, n))
+  gmm <- recursive_gmm(df$log_length)
+  # Handle empty or failed GMM fit gracefully
+  if(nrow(gmm) == 0 || !"mean_log10" %in% colnames(gmm)) return(rep(NA_character_, n))
+  map_chr(df$log_length, function(x) {
+    idx <- which.min(abs(x - gmm$mean_log10))
+    if(length(idx)==0) return(NA_character_)
+    gmm$submode[idx]
+  })
+}
+
+r1v <-
+  resolution_1va %>%
+  mutate(
+    merge_thresh = pmax(50, 0.01 * width),
+    fuzzy_start = start - merge_thresh,
+    fuzzy_end   = end + merge_thresh
+  ) %>%
+  filter(!is.na(start))
+
+r1v2 <- 
+  resolution_1va %>% 
+  filter(variant_specific !="none", !is.na(start)) %>%
+  mutate(log_width = log10(width)) %>%
+  distinct()
+
+all_kde <- assign_kde_peaks(disp_all) 
+
+all_kde_gmm <- 
+  all_kde%>%
+  group_by(mode_group) %>%
+  mutate(submode = assign_gmm_submodes(cur_data())) %>%
+  ungroup()
+
+all_kde <- assign_kde_peaks(disp_all)
+
+
+gmm_summary <- all_kde_gmm %>%
+  filter(!is.na(submode)) %>%
+  group_by(mode_group, submode) %>%
+  summarise(
+    count = n(),
+    median_length_bp = median(width),
+    mean_length_bp = mean(width),
+    sd_length_bp = sd(width),
+    iqr_length_bp = IQR(width),
+    tightness = sd(width) / mean(width),   
+    .groups = "drop"
+  ) %>%
+  arrange( mode_group, mean_length_bp)
+
+gmm_summary
+
+
+all_kde_gmm$SV_id <- seq_len(nrow(all_kde_gmm))
+
+
+
+## find 
+
+
+sv_ranges <- IRanges(start = r1v2$start, end = r1v2$end)
+# Get all overlaps
+hits <- findOverlaps(sv_ranges, sv_ranges, type = "any")
+
+reciprocal_overlap <- function(i, j) {
+  ov_start <- max(r1v2$start[i], r1v2$start[j])
+  ov_end   <- min(r1v2$end[i],   r1v2$end[j])
+  ov_len   <- max(0, ov_end - ov_start + 1)
+  len_i    <- r1v2$end[i] - r1v2$start[i] + 1
+  len_j    <- r1v2$end[j] - r1v2$start[j] + 1
+  c(ov_len / len_i, ov_len / len_j)
+}
+
+# Build a graph
+#library(igraph)
+edges <- vector("list", length = 0)
+for(k in seq_along(hits@from)) {
+  i <- hits@from[k]
+  j <- hits@to[k]
+  if(i < j) {  # Avoid double counting
+    ro <- reciprocal_overlap(i, j)
+    if(all(ro >= 0.8)) {
+      edges <- append(edges, list(c(i, j)))
+    }
+  }
+}
+
+all_ids <- seq_len(nrow(r1v2))
+g <- igraph::make_empty_graph(n = length(all_ids), directed = FALSE) %>%
+     igraph::add_edges(unlist(edges))
+
+V(g)$name <- as.character(all_ids)
+
+# Now get the membership for all SVs
+membership <- rep(NA_integer_, length(all_ids))
+g_membership <- components(g)$membership
+
+# Map graph membership to original SV indices
+membership[as.integer(V(g)$name)] <- g_membership
+
+# Now assign it back; singletons will be NA, so replace with unique group
+singleton_ids <- which(is.na(membership))
+membership[singleton_ids] <- max(g_membership) + seq_along(singleton_ids)
+
+membership <- components(g)$membership
+
+akg <- 
+  r1v2 %>%
+  mutate( 
+    recurrence_group = membership
+  )
+
+sorted_reoc<- 
+  akg %>% add_count(recurrence_group, sort = T) %>% as.data.frame() %>%
+  arrange(desc(n), desc(recurrence_group))
+
+
+sorted_reoc %>% filter(variant=="Structural rearrangement")
+
+
+plot_gmm_fit_for_mode <- function(df, mode_group_name, n_components = 3, bins = 50) {
+  sub <- df %>% filter(mode_group == mode_group_name)
+  log_lengths <- sub$log_length
+  
+  # Fit GMM
+  gmm <- Mclust(log_lengths, G = 1:n_components)
+  means <- gmm$parameters$mean
+  sds <- sqrt(gmm$parameters$variance$sigmasq)
+  props <- gmm$parameters$pro
+  
+  # Data for plotting densities
+  x_vals <- seq(min(log_lengths), max(log_lengths), length.out = 500)
+  
+  # Mixture density
+  mixture_density <- rowSums(sapply(1:length(means), function(i) {
+    props[i] * dnorm(x_vals, means[i], sds[i])
+  }))
+  
+  # Each component (for plotting)
+  component_densities <- sapply(1:length(means), function(i) {
+    props[i] * dnorm(x_vals, means[i], sds[i])
+  })
+  component_df <- data.frame(x = rep(x_vals, length(means)),
+                             y = as.vector(component_densities),
+                             component = rep(paste0("Comp_", 1:length(means)), each = length(x_vals)))
+  
+  # Plot
+  ggplot() +
+    geom_histogram(
+      data = sub, aes(x = log_length, y = after_stat(density)), 
+      bins = bins, fill = "grey85", color = "grey50", alpha = 0.6
+    ) +
+    geom_line(aes(x = x_vals, y = mixture_density), linewidth = 1.1, color = "blue") +
+    geom_line(
+      data = component_df, 
+      aes(x = x, y = y, color = component),
+      linewidth = 1, linetype = "dashed"
+    ) +
+    scale_color_brewer(palette = "Dark2") +
+    labs(
+      title = paste("GMM fit for", mode_group_name),
+      x = "log10(SV length)", y = "Density"
+    ) +
+    theme_minimal(base_size = 14)
+}
+
+# Example usage:
+plot_gmm_fit_for_mode(all_kde, "Peak_1", n_components = 3)
+
+ggplot(gmm_summary, aes(x = count, y = tightness, color = mode_group, label = submode)) +
+  geom_point(size = 3) +
+  geom_text(nudge_y = 0.02, size = 3, show.legend = FALSE) +
+  labs(
+    x = "Count (number of SVs in mode)",
+    y = "Tightness (SD/mean)",
+    color = "Mode group",
+    title = "Tightness vs. Count for Each Mode"
+  ) +
+  theme_minimal()
+
+
+library(ggplot2)
+
+ggplot(gmm_summary, aes(x = mean_length_bp, y = tightness, size = count, label = submode)) +
+  geom_point(alpha = 0.7, color = "#2a5599") +
+  geom_text(vjust = -0.8, size = 3) +
+  scale_x_log10() +
+  labs(
+    x = "Mean SV length (bp, log10)",
+    y = "Tightness (SD/mean)",
+    size = "Count",
+    title = "Tightness vs. Mean SV Length (Bubble size = count per mode)"
+  ) +
+  theme_minimal()
+
+
+
+
+ggplot(all_kde_gmm, aes(x = log10(width), fill = submode)) +
+  geom_histogram(binwidth = 0.1, color = "black", alpha=0.8) +
+  facet_wrap(~variant, scales = "free_y") +
+  labs(x = "log10(SV width)", y = "Count", fill = "GMM submode", 
+       title = "SV Length Distribution by Variant Type and GMM Submode")
+
+ggplot(all_kde_gmm, aes(x = log10(width), color = submode, fill = submode)) +
+  geom_density(alpha=0.3) +
+  facet_wrap(~variant, scales = "free_y") +
+  labs(x = "log10(SV width)", y = "Density", fill = "GMM submode", 
+       title = "SV Length Density by Variant Type and Submode")
+
+
+all_kde <-
+  all_kde %>%
+  mutate(submode = assign_gmm_submodes(.)) 
+  
+
+
+dup_kde %>%
+  dplyr::select(rid, qid, start, end, width, mode_group, mode_mean_bp, zone) %>%
+  arrange(mode_group, width) %>% as.data.frame()
+
+r1v
+ggplot(dup_kde, aes(x = log10(width), fill = mode_group)) +
+  geom_histogram(binwidth = 0.1, alpha = 0.7, color = "black") +
+  geom_vline(aes(xintercept = log10(mode_mean_bp)), 
+             data = dup_kde %>% distinct(mode_group, mode_mean_log, mode_mean_bp), 
+             linetype = "dashed", color = "red") +
+  labs(x = "log10(Duplication width)", y = "Count", fill = "Mode group",
+       title = "Dispersed Duplication Size Modes (KDE-based clusters)")
+
+sr1v_ranges <- IRanges(start = r1v$fuzzy_start, end = r1v$fuzzy_end)
+
+# Reduce merges overlapping/nearby SVs to create cluster intervals
+merged <- reduce(sr1v_ranges)
+
+# Map each SV to its merged group
+r1v_hits <- findOverlaps(IRanges(r1v$start, r1v$end), merged)
+
+r1v$sv_cluster <- NA_integer_
+
+length(unique(r1v$sv_cluster))
+
+
+r1v %>%
+  group_by(sv_cluster) %>%
+  summarise(n_SVs = n()) %>%
+  arrange(desc(n_SVs)) %>%
+  head(10)
+
+
+# The result from findOverlaps() is a Hits object:
+# - queryHits: index of SV (row in r1v)
+# - subjectHits: index of merged cluster interval
+
+hits <- findOverlaps(IRanges(r1v$start, r1v$end), merged)
+
+# Assign cluster ID where there is a hit
+r1v$sv_cluster[queryHits(hits)] <- subjectHits(hits)
+
+
+r1v %>%
+  count(sv_cluster) %>%
+  ggplot(aes(n)) +
+    geom_histogram(binwidth = 1) +
+    labs(x = "Number of SVs per cluster", y = "Count of clusters",
+         title = "Distribution of SV Recurrence (Cluster Size)")
+
+
+
+alignment_dir_ava
+
+alignment_directory <- 
+  alignment_dir_rvq
+
+get_all_SVs(alignment_dir_1va)
+
+
+get_all_SVs <- 
+  function(alignment_directory) {
+
+    all_delta_filt_files <- 
+      list.files(
+        alignment_directory,
+        full.names = TRUE, pattern = "filtered.delta"
+      )
+  
+    all_delta_unfilt_files <- 
+      list.files(
+        sprintf("%s/unfiltered", alignment_directory),
+        full.names = TRUE
+      )
+  
+    filt_basenames  <- basename(all_delta_filt_files)
+    filt_core_names <- sub("_filtered\\.delta$", "", filt_basenames)
+  
+    unfilt_basenames  <- basename(all_delta_unfilt_files)
+    unfilt_core_names <- sub("\\.delta$", "", unfilt_basenames)
+  
+    # Add this line:
+    unfilt_lookup <- setNames(all_delta_unfilt_files, unfilt_core_names)
+  
+    n <- length(all_delta_filt_files)
+    all_res <- vector("list", n)
+  
+    pb <- txtProgressBar(min = 1, max = n, style = 3)
+  
+    for (i in 1:n) {
+      core_name <- filt_core_names[i]
+      filtered_delta <- all_delta_filt_files[i]
+  
+      if (!core_name %in% names(unfilt_lookup)) {
+        warning(
+          sprintf(
+            "No unfiltered file found for %s, skipping...", 
+            filtered_delta
+            )
+          )
+        next
+      }
+      unfiltered_delta <- unfilt_lookup[[core_name]]
+      species_name <- "Salmonella_enterica" # change as needed
+  
+      all_res[[i]] <- 
+        delta_all_SVs(
+          delta_file = filtered_delta, 
+          unfiltered_delta_file = unfiltered_delta,
+          species_name = species_name
+        )
+  
+      setTxtProgressBar(pb, i)
+    }
+  
+    close(pb)
+  
+    return(bind_rows(Filter(Negate(is.null), all_res)))
+}
+
+
+
+deltas_ava
+
+delta_all_SVs
+
+
+method_summary <- 
+  map_dfr(names(res_list), function(meth) {
+  df <- res_list[[meth]]
+  tibble(
+    Method = meth,
+    Total_SVs = nrow(df),
+    Median_Width = median(df$width, na.rm=TRUE),
+    Mean_Width   = mean(df$width, na.rm=TRUE)
+  )
+})
+
+# SV types per method
+sv_type_summary <- map_dfr(names(res_list), function(meth) {
+  df <- res_list[[meth]]
+  df %>%
+    count(variant) %>%
+    mutate(Method = meth)
+})
+
+# Wide-format for SV type count
+sv_type_wide <- sv_type_summary %>%
+  tidyr::pivot_wider(names_from = variant, values_from = n, values_fill = 0)
+
+method_summary <- left_join(method_summary, sv_type_wide, by = "Method")
+library(kableExtra)
+(method_summary, digits=2, caption = "Summary of SV detection resolution by method")
+
+
+all_df <- bind_rows(
+  lapply(names(res_list), function(meth) {
+    df <- res_list[[meth]]
+    df$Method <- meth
+    df
+  })
+)
+ggplot(all_df, aes(x = Method, y = width, fill = Method)) +
+  geom_violin(alpha=0.6) +
+  scale_y_log10() +
+  theme_classic(base_size = 15) +
+  labs(title = "SV Size Distribution by Alignment Strategy",
+       y = "SV Length (bp, log scale)", x = "Method")
+
+
+all_df %>% group_by(species, Method, variant, variant_specific) %>%
+  summarise(
+    variant_count = n()
+  )
+
+
+```
+
+
+## Genic enrichment
+```{r}
+
+annotate_fna2 <- 
+  function(species_name, sync_dir, prokka_dir, accessions){
+        sfs <- 
+            list.files(sync_dir_the_rest, full.names = T) 
+        sfs <- 
+            sfs[
+            sub(".txt", "", basename(sfs)) %in% prokka_accs
+            ]
+        
+        accessions
+        prokka_coms <- 
+            pbmclapply(
+                1:length(sfs), 
+                function(i){
+                    # prokka_check <- 
+                    #     sprintf(
+                    #         "if [ ! -e %s ]",
+                    #         filter_out
+                    #     )
+                    prokka_com <- 
+                        sprintf(
+                            "prokka --species '%s' --outdir %s --prefix %s %s %s",
+                            gsub("_", " ", species_name),
+                            prokka_dir, 
+                            gsub(".txt", "", basename(sfs))[i],
+                            sfs[i],
+                            "--force"
+                        )
+                    return(prokka_com)
+                }
+            ) %>% 
+            unlist
+        prokka_file <- 
+            sprintf("%s/prokka_coms.txt", prokka_dir_temp)
+        
+        prokka_out <- 
+            list(
+                file = prokka_file,
+                comms = prokka_coms
+            )
+        return(prokka_out)
+    }
+
+prokka_accs <- 
+    clustered_genomes_ss$accessions
+
+
+prokka_dir %>% list.files
+
+prokka_dir_temp <- 
+    "../data/prokka_temp"
+pd3 <- 
+    sprintf(
+        "../data/prokka3/%s",
+        species_name
+    )
+
+pd4 <- 
+    sprintf(
+        "../data/prokka4/%s",
+        species_name
+    )
+
+if (!dir.exists(prokka_dir_temp)){dir.create(prokka_dir_temp, recursive = T)}
+if (!dir.exists(pd4)){dir.create(pd4, recursive = T)}
+list.files(sync_dir)
+
+
+pbmclapply(
+    1:length(prokka_out$comms),
+    function(i){
+        system(prokka_out$comms[i])
+    }, mc.cores = 1
+)
+
+prok_com <- 
+    annotate_fna2(
+        species_name = 
+            species_name,
+        sync_dir = 
+            sync_dir, 
+        prokka_dir = 
+            prokka_dir_temp, 
+        accessions = 
+            prokka_accs
+    )
+
+
+```
+
+
+
+
