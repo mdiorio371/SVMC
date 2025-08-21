@@ -2,7 +2,6 @@
 
 # SVMC <img src="figs/logo.png" align="right" width="120"/>
 
-![R-CMD-check](https://github.com/mdiorio371/SVMC/actions/workflows/R-CMD-check.yaml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **SVMC** (Structural Variant Mapping and Characterization) is an R package for analyzing bacterial structural variation.  
