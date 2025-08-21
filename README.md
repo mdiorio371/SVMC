@@ -62,9 +62,13 @@ flowchart TD
 
 
 ### The Origin of replication can be located for an individual or set of complete genome sequences
+A confidence score is provided based on the three methods for locating the OriC: the GC inflection, DnaA box clusters, and the dnaA gene annotation.
+
 
 assembly_dir <- "path/to/assembly"
+
 load_assemblies(species_name, assembly_dir, n = 20)
+
 locate_ori(assembly_dir)
 
 ![ori_location](ori.png)
