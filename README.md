@@ -67,6 +67,6 @@ assembly_dir <- "path/to/assembly"
 load_assemblies(species_name, assembly_dir, n = 20)
 locate_ori(assembly_dir)
 
-![ori_location](figs/ori.png)
+![ori_location](ori.png)
 
 
