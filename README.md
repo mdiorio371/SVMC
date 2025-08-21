@@ -1,7 +1,9 @@
-# SVMC
+# SVMC 
 Structural variant mapping and characterization
 
-# install.packages("devtools")
+(This R Package is under development)
+
+install.packages("devtools")
 devtools::install_github("mdiorio371/SVMC")
 
 library(SVMC)
@@ -57,3 +59,14 @@ flowchart TD
     C --> D
     E --> F
 ```
+
+
+# The Origin of replication can be located for an individual or set of complete genome sequences
+
+assembly_dir <- "path/to/assembly"
+load_assemblies(species_name, assembly_dir, n = 20)
+locate_ori(assembly_dir)
+
+![ori_location](ori.png)
+
+
