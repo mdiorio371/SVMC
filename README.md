@@ -17,29 +17,32 @@ SVMC(
   )
 
 
-  ```mermaid
+```mermaid
 flowchart TD
-    subgraph Preprocessing[" "]
-        A["Choose a bacterial species<br/>with multiple complete assemblies"]
-        B["Load and arrange each sequence<br/>at the dnaA gene"]
-        C["Verify OriC location with<br/>GC inflection and dnaA boxes"]
+    %% --- Preprocessing ---
+    subgraph Preprocessing["Preprocessing"]
+        A["Choose bacterial species<br/>with multiple assemblies"]
+        B["Arrange sequences at dnaA gene"]
+        C["Verify OriC location<br/>(GC skew + dnaA boxes)"]
         A --> B --> C
     end
     style Preprocessing fill:#e6f0fa,stroke:#99bbdd,stroke-width:2px
 
-    subgraph Alignment[" "]
+    %% --- Alignment ---
+    subgraph Alignment["Alignment strategies"]
         D["Choose alignment strategy"]
-        D1["All-VS-all"]
-        D2["References VS Queries"]
-        D3["One-VS-all"]
+        D1["All vs All"]
+        D2["References vs Queries"]
+        D3["One vs All"]
         E["Process alignment tables"]
         D --> D1 --> E
         D --> D2 --> E
         D --> D3 --> E
     end
-    style Alignment fill:#eaf7ea,stroke:#aacbaa,stroke-width:2px
+    style Alignment fill:#eaf7ea,stroke:#88bb88,stroke-width:2px
 
-    subgraph Variants[" "]
+    %% --- Variants ---
+    subgraph Variants["Variant capture & annotation"]
         F["Capture variants"]
         F1["Indels"]
         F2["Translocations"]
@@ -54,8 +57,9 @@ flowchart TD
         F --> F4 --> G
         G --> H --> I
     end
-    style Variants fill:#fff2e0,stroke:#ddbb99,stroke-width:2px
+    style Variants fill:#fff2e0,stroke:#ddaa77,stroke-width:2px
 
+    %% --- Connections ---
     C --> D
     E --> F
 ```
