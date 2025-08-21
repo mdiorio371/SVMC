@@ -61,12 +61,12 @@ flowchart TD
 ```
 
 
-# The Origin of replication can be located for an individual or set of complete genome sequences
+### The Origin of replication can be located for an individual or set of complete genome sequences
 
 assembly_dir <- "path/to/assembly"
 load_assemblies(species_name, assembly_dir, n = 20)
 locate_ori(assembly_dir)
 
-![ori_location](ori.png)
+![ori_location](figs/ori.png)
 
 
