@@ -1,20 +1,34 @@
-# SVMC 
-Structural variant mapping and characterization
 
-(This R Package is under development)
 
-install.packages("devtools")
+# SVMC <img src="figs/logo.png" align="right" width="120"/>
+
+![R-CMD-check](https://github.com/mdiorio371/SVMC/actions/workflows/R-CMD-check.yaml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**SVMC** (Structural Variant Mapping and Characterization) is an R package for analyzing bacterial structural variation.  
+It provides tools to locate origins of replication, align complete assemblies, parse alignments for structural variants (SVs), model SV length distributions, and annotate breakpoint contexts.
+
+---
+
+## 🔧 Installation
+
+```r
+# install.packages("devtools")
 devtools::install_github("mdiorio371/SVMC")
 
 library(SVMC)
 
+
 ncbi_table <- readRDS("ncbi_table.rds")
 species_name <- "Salmonella_enterica"
 
+# Run the SVMC workflow
 SVMC(
-  species = Salmonella_enterica, 
+  species    = species_name,
   ncbi_table = ncbi_table
-  )
+)
+
+```  
 
 
 ```mermaid
@@ -68,12 +82,12 @@ flowchart TD
 ### The Origin of replication can be located for an individual or set of complete genome sequences
 A confidence score is provided based on the three methods for locating the OriC: the GC inflection, DnaA box clusters, and the dnaA gene annotation.
 
-
 assembly_dir <- "path/to/assembly"
 
+# Load and analyze assemblies
 load_assemblies(species_name, assembly_dir, n = 20)
-
 locate_ori(assembly_dir)
+
 
 ![ori_location](ori.png)
 
