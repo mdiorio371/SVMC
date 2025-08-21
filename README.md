@@ -1,2 +1,2 @@
-# SVCM
-Structural variant characterization and mapping
+# SVMC
+Structural variant mapping and characterization
