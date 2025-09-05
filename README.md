@@ -95,4 +95,4 @@ locate_ori(assembly_dir)
 
 ###Annotation of gene-length SVs and enrichment snalysis
 
-![sv_gene](sv_gene.png)
+![sv_gene](sv_genes.png)
