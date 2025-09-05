@@ -93,9 +93,6 @@ locate_ori(assembly_dir)
 ![ori_location](ori.png)
 
 
-### Alignment strategies summary
-%% Alignment strategies schematic
+###Annotation of gene-length SVs and enrichment snalysis
 
-```mermaid
-
-```
+![sv_gene](sv_gene.png)
