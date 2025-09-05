@@ -93,3 +93,42 @@ locate_ori(assembly_dir)
 ![ori_location](ori.png)
 
 
+%% Alignment strategies schematic
+
+flowchart TD
+
+subgraph One-vs-All
+    R1["Reference"]
+    Q1["Query 1"]
+    Q2["Query 2"]
+    Q3["Query 3"]
+
+    R1 --> Q1
+    R1 --> Q2
+    R1 --> Q3
+end
+
+subgraph Refs-vs-Queries
+    Ra["Ref A"]
+    Rb["Ref B"]
+    Qa["Query A"]
+    Qb["Query B"]
+
+    Ra --> Qa
+    Ra --> Qb
+    Rb --> Qa
+    Rb --> Qb
+end
+
+subgraph All-vs-All
+    A["Genome A"]
+    B["Genome B"]
+    C["Genome C"]
+
+    A <--> B
+    A <--> C
+    B <--> C
+end
+
+
+
