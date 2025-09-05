@@ -94,6 +94,7 @@ locate_ori(assembly_dir)
 
 
 %% Alignment strategies schematic
+```mermaid
 
 flowchart TD
 
@@ -129,6 +130,6 @@ subgraph All-vs-All
     A <--> C
     B <--> C
 end
-
+```
 
 
