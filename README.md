@@ -93,43 +93,84 @@ locate_ori(assembly_dir)
 ![ori_location](ori.png)
 
 
-### Alignment strategies schematic
-```mermaid
+### Alignment strategies summary
+%% Alignment strategies schematic
 
-flowchart TD
+```mermaid
+flowchart LR
 
 subgraph One-vs-All
     R1["Reference"]
     Q1["Query 1"]
     Q2["Query 2"]
     Q3["Query 3"]
+    Q4["Query 4"]
+    Qn["..."]
 
     R1 --> Q1
     R1 --> Q2
     R1 --> Q3
+    R1 --> Q4
+    R1 --> Qn
 end
 
 subgraph Refs-vs-Queries
-    Ra["Ref A"]
-    Rb["Ref B"]
-    Qa["Query A"]
-    Qb["Query B"]
+    R2a["Ref 1"]
+    R2b["Ref 2"]
+    R2c["Ref 3"]
+    R2n["..."]
 
-    Ra --> Qa
-    Ra --> Qb
-    Rb --> Qa
-    Rb --> Qb
+    Q2a["Query 1"]
+    Q2b["Query 2"]
+    Q2c["Query 3"]
+    Q2n["..."]
+
+    R2a --> Q2a
+    R2a --> Q2b
+    R2a --> Q2c
+    R2a --> Q2n
+
+    R2b --> Q2a
+    R2b --> Q2b
+    R2b --> Q2c
+    R2b --> Q2n
+
+    R2c --> Q2a
+    R2c --> Q2b
+    R2c --> Q2c
+    R2c --> Q2n
+
+    R2n --> Q2a
+    R2n --> Q2b
+    R2n --> Q2c
+    R2n --> Q2n
 end
 
 subgraph All-vs-All
-    A["Genome A"]
-    B["Genome B"]
-    C["Genome C"]
+    A["Genome 1"]
+    B["Genome 2"]
+    C["Genome 3"]
+    D["Genome 4"]
+    E["Genome 5"]
+    N["..."]
 
     A <--> B
     A <--> C
+    A <--> D
+    A <--> E
+    A <--> N
+
     B <--> C
+    B <--> D
+    B <--> E
+    B <--> N
+
+    C <--> D
+    C <--> E
+    C <--> N
+
+    D <--> E
+    D <--> N
+
+    E <--> N
 end
-```
-
-
