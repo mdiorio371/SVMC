@@ -93,7 +93,7 @@ locate_ori(assembly_dir)
 ![ori_location](ori.png)
 
 
-%% Alignment strategies schematic
+### Alignment strategies schematic
 ```mermaid
 
 flowchart TD
