@@ -97,80 +97,82 @@ locate_ori(assembly_dir)
 %% Alignment strategies schematic
 
 ```mermaid
-flowchart LR
+%% Alignment strategies (vertical panels)
 
-subgraph One-vs-All
-    R1["Reference"]
-    Q1["Query 1"]
-    Q2["Query 2"]
-    Q3["Query 3"]
-    Q4["Query 4"]
-    Qn["..."]
+flowchart TB
+  %% ---------- Panel A ----------
+  subgraph A["A. One-vs-All"]
+    direction TB
+    A_R["Reference"]
+    A_Q1["Query 1"]
+    A_Q2["Query 2"]
+    A_Q3["Query 3"]
+    A_Q4["Query 4"]
+    A_Qn["..."]
 
-    R1 --> Q1
-    R1 --> Q2
-    R1 --> Q3
-    R1 --> Q4
-    R1 --> Qn
-end
+    A_R --> A_Q1
+    A_R --> A_Q2
+    A_R --> A_Q3
+    A_R --> A_Q4
+    A_R --> A_Qn
+  end
 
-subgraph Refs-vs-Queries
-    R2a["Ref 1"]
-    R2b["Ref 2"]
-    R2c["Ref 3"]
-    R2n["..."]
+  %% ---------- Panel B ----------
+  subgraph B["B. Refs-vs-Queries"]
+    direction LR
 
-    Q2a["Query 1"]
-    Q2b["Query 2"]
-    Q2c["Query 3"]
-    Q2n["..."]
+    subgraph B_L["Refs"]
+      direction TB
+      B_R1["Ref 1"]
+      B_R2["Ref 2"]
+      B_R3["Ref 3"]
+      B_Rn["..."]
+    end
 
-    R2a --> Q2a
-    R2a --> Q2b
-    R2a --> Q2c
-    R2a --> Q2n
+    subgraph B_R["Queries"]
+      direction TB
+      B_Q1["Query 1"]
+      B_Q2["Query 2"]
+      B_Q3["Query 3"]
+      B_Qn["..."]
+    end
 
-    R2b --> Q2a
-    R2b --> Q2b
-    R2b --> Q2c
-    R2b --> Q2n
+    %% all refs compared to all queries
+    B_R1 --> B_Q1
+    B_R1 --> B_Q2
+    B_R1 --> B_Q3
+    B_R1 --> B_Qn
 
-    R2c --> Q2a
-    R2c --> Q2b
-    R2c --> Q2c
-    R2c --> Q2n
+    B_R2 --> B_Q1
+    B_R2 --> B_Q2
+    B_R2 --> B_Q3
+    B_R2 --> B_Qn
 
-    R2n --> Q2a
-    R2n --> Q2b
-    R2n --> Q2c
-    R2n --> Q2n
-end
+    B_R3 --> B_Q1
+    B_R3 --> B_Q2
+    B_R3 --> B_Q3
+    B_R3 --> B_Qn
 
-subgraph All-vs-All
-    A["Genome 1"]
-    B["Genome 2"]
-    C["Genome 3"]
-    D["Genome 4"]
-    E["Genome 5"]
-    N["..."]
+    B_Rn --> B_Q1
+    B_Rn --> B_Q2
+    B_Rn --> B_Q3
+    B_Rn --> B_Qn
+  end
 
-    A <--> B
-    A <--> C
-    A <--> D
-    A <--> E
-    A <--> N
+  %% ---------- Panel C ----------
+  %% For AvA, show a clean ring + note to avoid spaghetti
+  subgraph C["C. All-vs-All (every pair compared)"]
+    direction TB
+    C_A["Genome 1"] --- C_B["Genome 2"] --- C_C["Genome 3"]
+    C_A --- C_D["Genome 4"]
+    C_C --- C_E["Genome 5"]
+    C_E --- C_N["..."]
 
-    B <--> C
-    B <--> D
-    B <--> E
-    B <--> N
+    %% Minimal extra links to suggest density
+    C_B --- C_D
+    C_D --- C_E
 
-    C <--> D
-    C <--> E
-    C <--> N
-
-    D <--> E
-    D <--> N
-
-    E <--> N
-end
+    C_note["All pairs are compared; edges simplified for clarity."]
+    C_A -.-> C_note
+  end
+```
