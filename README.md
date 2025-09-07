@@ -1,5 +1,4 @@
-
-
+![Status](https://img.shields.io/badge/status-work--in--progress-orange)
 # SVMC <img src="figs/logo.png" align="right" width="120"/>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
