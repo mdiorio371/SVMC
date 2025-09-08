@@ -34,7 +34,7 @@ SVMC(
 
 
 
-### The Origin of replication can be located for an individual or set of complete genome sequences
+### The Origin of replication can be located for an individual or a set of complete genome sequences
 A confidence score is provided based on the three methods for locating the OriC: the GC inflection, DnaA box clusters, and the dnaA gene annotation.
 
 assembly_dir <- "path/to/assembly"
@@ -45,6 +45,8 @@ locate_ori(assembly_dir)
 
 
 ![ori_location](ori.png)
+
+Origin of replication signal profiles across bacterial species. Plots show GC disparity (black lines) and dnaA box cluster density (blue points), and the location of the dnaA gene (vertical arrow) along individual complete genomes. Vertical shaded lines indicate predicted origin positions by a combined score of the three metrics. The OriC positions of the top three scores are shown for each species. 
 
 
 ### Annotation of gene-length SVs and enrichment analyses
