@@ -49,4 +49,4 @@ locate_ori(assembly_dir)
 
 ### Annotation of gene-length SVs and enrichment analyses
 
-![sv_gene](figures/sv_gene_enrichment.png)
+![sv_gene](figures/sv_genic_enrichment.png)
