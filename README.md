@@ -50,3 +50,5 @@ locate_ori(assembly_dir)
 ### Annotation of gene-length SVs and enrichment analyses
 
 ![sv_gene](figures/sv_genic_enrichment.png)
+
+Annotations of gene-length SVs. (A) Distribution of reciprocal overlap thresholds for gene-length SVs across four bacterial species.(B) Functional enrichment of gene categories disrupted by gene-length SVs, shown as log₂ fold enrichment relative to genomic background within each sequence. (C) Abundance and family composition of insertion sequence (IS) elements.
