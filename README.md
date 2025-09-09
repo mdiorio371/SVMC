@@ -12,7 +12,6 @@ It provides tools to locate origins of replication, align complete assemblies, p
 ## 🔧 Installation
 
 ```r
-##(This package is still in development)
 # install.packages("devtools")
 devtools::install_github("mdiorio371/SVMC")
 
