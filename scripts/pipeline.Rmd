@@ -1,0 +1,3726 @@
+---
+title: "Ch2"
+output: html_document
+date: "2025-07-10"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+### chapter 2 
+
+```{r}
+
+ncbi_table <- 
+  readRDS(
+    "data/refseq_taxonomy.rds"
+  )
+
+
+ncbi_table %>% group_by(phylum_clade, species) %>%
+  summarise(
+    count = n()
+  ) %>% arrange(desc(count))
+
+species_name <- 
+  "Staphylococcus_aureus"
+
+  
+### prepare directories  
+
+clade_name <- 
+  filter(
+    ncbi_table, 
+    species == 
+      sub("_", " ", species_name)
+    )%>%
+  dplyr::slice(1) %>%
+  pull(phylum_clade) %>% gsub(" ", "_", .)
+
+species_variable_names <-
+    c(
+        "sync_dir", "identity_dir",
+        "oriC_dir",
+        "alignment_dir", "r_vars_dir", "results_dir", 
+        "snp_dir",
+        #"disparities_dir",# "c01_dir",
+        #"subset_dir",
+        #"breakpoint_dir", 
+        "prokka_dir"
+        #"breakpoint_comparisons_dir", "snp_dir",
+        #"kmer_dir", "bd_dir", "plot_dir", "roary_dir",
+        #"sync2_dir", "test_dir"
+    )
+
+species_dirs <- 
+    gsub("_dir", "", species_variable_names)
+
+
+
+species_dirs <- 
+    gsub("_dir", "", species_variable_names)
+
+for (var_name in species_variable_names){
+    dir_name <- 
+        gsub("_dir", "", var_name)
+    full_dir_name <- 
+        sprintf(
+            "processing/%s/%s/%s", 
+            dir_name, clade_name, 
+            species_name
+        )
+    
+    assign(
+        var_name, 
+        full_dir_name
+    )
+    if (!dir.exists(full_dir_name)){dir.create(full_dir_name, recursive = T)}
+}
+
+
+
+### take a sample of 200
+ncbi_table
+  
+
+
+ species_table <- 
+      ncbi_table %>%
+
+
+species_table <- 
+  ncbi_table %>%
+  filter(
+    species==sub("_", " ", species_name)
+  )
+
+assembly_table <- 
+  pbmclapply(
+    1:200,
+    function(i){
+      #for (i in 200:1){
+      assembly_path <- 
+        (species_table %>% pull(ftp_path))[i]
+      
+      fasta_path <- 
+        sprintf(
+          "%s/%s_genomic.fna.gz",
+          assembly_path, 
+          gsub(".*/", "", assembly_path)
+          )
+      
+      gff_path <- 
+        sprintf(
+          "%s/%s_genomic.gff.gz",
+          assembly_path,
+          gsub(".*/", "", assembly_path)
+          )
+      
+      fna_exists <- 
+              file_exists_at_url(fasta_path)
+      gff_exists <- 
+              file_exists_at_url(gff_path)
+
+      dnaA_table <- 
+        dnaA_from_gff(
+          gff_path
+          )
+      if (!fna_exists | !gff_exists){
+        position_tib <- 
+          tibble( 
+            asm_name = 
+              basename(assembly_path),
+            note = "missing fasta/gff"
+                  )
+      } else {
+        position_tib <-   
+          dnaA_sync(fasta_path, dnaA_table, sync_dir)
+      }
+      #print(i)}
+      return(position_tib)
+    }
+      
+  ) %>%
+  bind_rows()
+
+assembly_table %>% filter(accession=="NZ_CP148880.1") %>% pull(out_file) %>% file.exists()
+
+
+
+saveRDS(
+  assembly_table,
+  sprintf(
+    "%s/assembly_table.rds",
+    r_vars_dir
+  )
+)
+
+# dnaA_positions <- 
+#   load_arranged_assemblies(species_name, ncbi_table, sync_dir, n = 200)
+
+
+set.seed(123)
+genome_subset <- 
+  assembly_table %>%
+  sample_n(20)
+
+accessions <- 
+  genome_subset %>% pull(accession)
+
+```
+
+
+
+Strategies for pairwise alignment, performance and resolution
+
+## identities for 1 vs all
+```{r}
+id_dir <- 
+  sprintf("%s/ss20", identity_dir)
+
+if (!dir.exists(id_dir)){dir.create(id_dir)}
+
+species_identities <- 
+    get_pairwise_identities(
+        sync_dir = sync_dir, 
+        id_dir = 
+          id_dir, 
+        species_name
+    )
+
+sampled_id_table <- 
+    species_identities$id_dists %>%
+    arrange(Sequence_mean_distance)
+species_identities
+
+
+
+species_identities$mash_plot
+```
+
+
+The different strategies
+
+
+
+```{r}
+
+All_vs_all_m <- 
+  t(combn(accessions, 2)) %>%
+  `colnames<-`(c("ref", "qry"))
+
+
+Refs_vs_Qrys <- 
+  expand_grid(
+    ref = accessions[1:round(length(accessions)/2)], 
+    qry = accessions[(round(length(accessions)/2)+1):length(accessions)]
+    )
+
+Refs_vs_Qrys$ref %>% unique %>% length
+Refs_vs_Qrys$qry %>% unique %>% length
+
+most_related <- 
+  species_identities$id_dists %>%
+  filter(Sequence %in% accessions) %>%
+    arrange(Sequence_mean_distance) %>%
+      dplyr::slice(1) %>% pull(Sequence)
+  sampled_id_table$Sequence[1]
+
+accessions
+
+One_vs_all <- 
+  tibble(
+    ref = most_related,
+    qry = accessions[accessions != most_related]
+    ) %>% 
+  as.matrix()%>%
+  `colnames<-`(c("ref", "qry"))
+
+alignment_dir_ava <- 
+  sprintf(
+    "%s/all_vs_all", alignment_dir
+  )
+alignment_dir_rvq <- 
+  sprintf(
+    "%s/refs_vs_qrys", alignment_dir
+  )
+alignment_dir_1va <- 
+  sprintf(
+    "%s/one_vs_all", alignment_dir
+  )
+
+sync_dir %>% list.files
+
+strategies <- 
+  list(
+    "All-vs-All" = list(
+    matrix = All_vs_all_m,
+    dir = alignment_dir_ava
+  ),
+  "Ref-vs-Query" = list(
+    matrix = Refs_vs_Qrys,
+    dir = alignment_dir_rvq
+  ),
+  "1-vs-All" = list(
+    matrix = One_vs_all,
+    dir = alignment_dir_1va
+  )
+)
+
+
+
+## benchmarks 
+benchmark_ava <- 
+  benchmark_alignments(All_vs_all_m, alignment_dir_ava, sync_dir, "All-vs-All")
+benchmark_rvq <- 
+  benchmark_alignments(Refs_vs_Qrys, alignment_dir_rvq, sync_dir, "Ref-vs-Query")
+benchmark_1va <- 
+  benchmark_alignments(One_vs_all, alignment_dir_1va, sync_dir, "1-vs-All")
+
+
+
+
+benchmark_rvq <- 
+  benchmark_rvq %>% mutate(ref =ref$ref, qry = qry$qry)
+all_benchmarks <- 
+  bind_rows(benchmark_ava, benchmark_rvq, benchmark_1va)
+
+all_benchmarks %>%
+  group_by(strategy) %>%
+  summarise(
+    total_runtime_sec = sum(runtime_sec, na.rm = TRUE),
+    mean_runtime_sec = mean(runtime_sec, na.rm = TRUE),
+    sd_runtime_sec   = sd(runtime_sec, na.rm = TRUE),
+    Alignments          = n(),
+  )
+
+saveRDS(
+  all_benchmarks,
+  sprintf("%s/all_benchmarks.rds", r_vars_dir)
+)
+
+
+
+### resolutions
+
+alignment_directory <- 
+  alignment_dir_ava
+
+list.files(alignment_dir_1va) %>% length()
+
+
+ava_resolution <- 
+   get_all_SVs(alignment_dir_ava, species_name )
+rvq_resolution <- 
+   get_all_SVs(alignment_dir_rvq, species_name )
+resolution_1va <- 
+   get_all_SVs(alignment_dir_1va, species_name )
+
+
+res_list <- 
+  list(
+    "all_vs_all"    = ava_resolution,
+    "ref_vs_query"  = rvq_resolution,
+    "one_vs_all"    = resolution_1va
+)
+
+
+saveRDS(res_list, sprintf("%s/res_list.rds", r_vars_dir))
+
+res_list <- readRDS( sprintf("%s/res_list.rds", r_vars_dir))
+
+ava_resolution <- 
+   res_list$all_vs_all
+rvq_resolution <- 
+   res_list$ref_vs_query
+resolution_1va <- 
+   res_list$one_vs_all
+
+
+
+rvq_resolution %>% count(species)
+
+
+
+list.files(alignment_dir_rvq)
+list.files(alignment_dir_1va)
+
+ava_resolution
+rvq_resolution
+resolution_1va
+###inversion recurrence
+#res_list_salmonella <- readRDS( sprintf("%s/res_list.rds", r_vars_dir))
+
+```
+
+
+### annotating the SVs
+
+
+```{r}
+res_raw <- 
+  map_dfr(res_files, function(p) {
+    sp <- basename(dirname(p))
+    rl <- readRDS(p)             # list: all_vs_all / ref_vs_query / one_vs_all
+    imap_dfr(rl, ~ mutate(.x, Strategy = name_to_strategy(.y), species = sp))
+  }) %>%
+  filter(
+    variant_specific!="none",
+    !is.na(width),
+    species %in% species_keep
+  )
+
+
+res_ava <- 
+  res_raw %>%
+  filter(
+    Strategy == "All-vs-All",
+    ) %>%
+  mutate(species_label = paste0("<i>", gsub("_"," ", species), "</i>"))
+
+res_raw %>% count(Strategy)
+res_rvq <- 
+  res_raw %>%
+  filter(
+    Strategy == "Ref-vs-Query",
+  ) %>%
+  mutate(species_label = paste0("<i>", gsub("_"," ", species), "</i>"))
+```
+
+
+```{r}
+
+prokka_root <- "processing/prokka"
+
+# --- Find all GFF/GFF.GZ files ---
+gff_paths <- list.files(
+  prokka_root,
+  pattern = "\\.gff(\\.gz)?$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+# Helper to strip .gff or .gff.gz
+strip_ext2 <- function(x) {
+  x %>%
+    str_remove("(?i)\\.gz$") %>%
+    str_remove("(?i)\\.gff$")
+}
+
+# Build the index table
+gff_index <- tibble(
+  gff_path  = gff_paths,
+  gff_file  = basename(gff_paths),
+  organism  = basename(dirname(gff_paths)),                
+  phylum    = basename(dirname(dirname(gff_paths))),       
+  accession = strip_ext2(basename(gff_paths))              
+) %>%
+  arrange(phylum, organism, gff_file)
+
+
+gff_types <- 
+pbmclapply(
+  1:nrow(gff_index), 
+  function(i){
+    #for (i in 1:nrow(gff_index)){
+    gff_i <- 
+      gff_index$gff_path[i]
+    type_count <- 
+      read.delim(
+        gff_i, header=F, comment.char = "#"
+        )  %>%
+      as_tibble() %>%
+      `colnames<-`(
+        c(
+           "accession", "source", "type", "start", 
+           "end", "score", "strand", "phase", "attributes")
+        ) %>%
+      filter(!is.na(start)) %>%
+      mutate(
+        width = end-start+1,
+        gene = str_extract(attributes, "(?<=gene=)[^;]+"),
+        product = str_extract(attributes, "(?<=product=)[^;]+")
+      ) %>%
+      dplyr::select(-c(attributes, source)) %>%
+          count(type)
+    return(type_count)
+    
+  }
+)
+
+#gff_types %>% bind_rows %>% count(type)
+
+
+res_ava$species %>% unique
+res_rvq$species %>% unique
+
+
+mt_rvq <-res_ava %>% filter(species=="Mycobacterium_tuberculosis") 
+  
+acc_root <- "processing/sync"
+
+acc_root %>% list.dirs(., recursive = T)
+
+
+
+ss_accs <- 
+  c(
+    res_rvq$rid,
+    res_rvq$qid
+  ) %>% unique
+
+spec_tib <- 
+  res_rvq %>% filter(rid %in% refs) %>% dplyr::select(rid, species, species_label) %>%
+  group_by(rid) %>% dplyr::slice(1) %>% arrange(species)
+length(refs)
+refs <- 
+  #unique(rvq_resolution$rid)
+  unique(res_rvq$rid)
+
+res_rvq %>% group_by(species) %>% summarise(rid_c = length(unique(rid)))
+
+
+
+refs %in% gff_index$accession
+
+### each run
+
+
+all_annotated <- 
+  pbmclapply(
+    1:length(refs),
+    function(i){
+      #for (i in 1:length(refs)){
+      acc_i <- refs[i]
+  
+      synced_file_i <- 
+        list.files(
+          acc_root,
+          pattern = sprintf("\\%s.txt$",acc_i),
+          recursive = TRUE,
+          full.names = TRUE
+          )[1] 
+      
+      
+      comp_tib_i <- 
+        res_rvq %>%
+        filter(rid == acc_i )
+      
+      gff_i <- 
+        gff_index %>%
+        filter(accession==acc_i)
+      
+      synced_file_i
+      gff_i
+      comp_tib_i
+      
+      # --- Find all GFF/GFF.GZ files ---
+      acc_paths <- 
+        list.files(
+          acc_root,
+          pattern = "\\.txt$",
+          recursive = TRUE,
+          full.names = TRUE
+          ) 
+      acc_length <- 
+        width(readDNAStringSet(synced_file_i))
+      
+      gff_original <- 
+        read.delim(
+          gff_i$gff_path
+          , header=F, comment.char = "#"
+          )  %>%
+        as_tibble() %>%
+        `colnames<-`(
+          c(
+             "accession", "source", "type", "start", 
+             "end", "score", "strand", "phase", "attributes")
+          ) %>%
+        filter(!is.na(start)) %>%
+        mutate(
+          width = end-start+1,
+          gene = str_extract(attributes, "(?<=gene=)[^;]+"),
+          product = str_extract(attributes, "(?<=product=)[^;]+"),
+          locus_tag = stringr::str_extract(attributes, "(?<=locus_tag=)[^;]+")
+        ) 
+      
+      gff_regions <- 
+       gff_original%>%
+        dplyr::select(-c(attributes, source))
+         
+      
+      coding <- 
+        IRanges(
+          start = gff_regions %>% filter(type=="CDS") %>% pull(start),
+          end = gff_regions %>% filter(type=="CDS") %>% pull(end)
+        ) %>% reduce()
+      
+      RNA <- 
+        IRanges(
+          start = gff_regions %>% filter(grepl("RNA", type)) %>% pull(start),
+          end = gff_regions %>% filter(grepl("RNA", type)) %>% pull(end)
+        ) %>% reduce()
+      
+      repeated <- 
+         IRanges(
+          start = gff_regions %>% filter(grepl("repeat", type)) %>% pull(start),
+          end = gff_regions %>% filter(grepl("repeat", type)) %>% pull(end)
+        ) %>% reduce()
+      
+      
+      all_anns <- 
+        c(
+            coding, RNA, repeated
+          ) %>% reduce
+      
+      intergeneic <- 
+        gaps(
+          all_anns,
+          start = 1, 
+          end = acc_length
+        )
+      
+      prop_intergenic <- 
+        round(100*sum(width(intergeneic))/acc_length, 2)
+      
+      prop_genic <- 
+        round(100*sum(width(all_anns))/acc_length, 2)
+      
+      asv_i <- 
+        annotate_SVs(comp_tib_i, gff_regions)
+      
+      asv_i <- asv_i %>%
+      mutate(reference = acc_i)
+    
+    # Optional: Create summary for this genome
+    summary_i <- create_sv_summary_tables(asv_i, genome_id = acc_i)
+    out_list <- 
+      list(
+      annotations = asv_i,
+      summary = summary_i,
+      genome_stats = tibble(
+        reference = acc_i,
+        n_svs = nrow(asv_i),
+        prop_genic = 100 - prop_intergenic
+      )
+    )
+    return()
+      
+      return(asv_i)
+    }, mc.cores = 4
+  )
+
+
+summary_i$gene_sized %>% arrange(desc(reciprocal_overlap))
+all_annotations <- bind_rows(lapply(all_annotated, function(x) x$annotations))
+all_summaries <- lapply(all_annotated, function(x) x$summary)
+genome_stats <- bind_rows(lapply(all_annotated, function(x) x$genome_stats))
+
+
+asv %>%
+  dplyr::select(rid, qid, start, end, width, variant, width,size_category, breakpoint_class, is_gene_sized_sv, sv_annotation) %>%
+  head(20)
+
+
+asv_test %>% 
+  select(variant, size_category, breakpoint_class, is_gene_sized_sv, sv_annotation) %>%
+  head(20)
+
+# Check gene-sized SVs
+asv_test %>%
+  filter(is_gene_sized_sv) %>%
+  select(width, gene_sized_match, reciprocal_overlap, multi_gene_type) %>%
+  head()
+
+# Check IS elements
+asv_test %>%
+  filter(is_element) %>%
+  select(variant, complete_genes, sv_annotation) %>%
+  head()
+
+
+```
+
+```{r}
+
+
+
+
+
+
+# build your gff_regions as you do now (must include type/start/end; gene/product/attributes optional)
+# filter comp_tib to the accession’s rows or just pass the full table:
+test_res <- annotate_SVs(
+  comp_tib      = comp_tib_i,          # can be rid/qid mixed; function filters to rid==accession
+  gff_regions   = gff_regions,         # same tibble you printed earlier# e.g., "NZ_AP017901.1"
+)
+
+sv_annot   <- res$sv_annot
+baselines  <- res$baselines
+gene_hits  <- res$gene_hits
+
+
+# Create comprehensive summaries
+summaries <- create_sv_summary_tables(asv, genome_id = "NZ_AP017901.1")
+
+# Print nicely formatted summary
+print_sv_summary(summaries)
+
+# Access specific tables
+summaries$overall           # One-row overall summary
+summaries$gene_sized        # All gene-sized SVs with gene names
+summaries$gene_frequency    # Which genes appear most often
+summaries$breakpoints       # Breakpoint analysis for non-gene-sized
+summaries$variants          # Summary by variant type
+summaries$multi_gene        # Multi-gene events
+summaries$intergenic_enrichment  
+
+summaries$gene_sized %>% count(multi_gene_type)
+
+
+annotate_SVs <- function(comp_tib, gff_regions, gene_length_percentiles = c(0.05, 0.95), 
+                         reciprocal_overlap_threshold = 0.8, secondary_overlap_threshold = 0.5) {
+  #' Annotate structural variants based on breakpoint disruptions and gene overlaps
+  #'
+  #' @param comp_tib Tibble with SV data (must have start, end, width, variant columns)
+  #' @param gff_regions GFF tibble with gene annotations
+  #' @param gene_length_percentiles Vector of two values for gene length bounds (default: 5th-95th percentile)
+  #' @param reciprocal_overlap_threshold Minimum overlap fraction for complete gene match (default: 0.8)
+  #' @param secondary_overlap_threshold Minimum overlap to report secondary genes (default: 0.5)
+  #'
+  #' @return Annotated tibble with breakpoint disruptions and gene annotations
+  
+  require(IRanges)
+  require(tidyverse)
+  
+  # Helper function to classify gene functions
+  classify_gene_function <- function(gene_name, product) {
+    g <- gene_name
+    p <- product
+    
+    # Handle NAs
+    if (is.na(p) || p == "") {
+      if (is.na(g) || g == "") {
+        return(list(functional_class = NA_character_, subfamily = NA_character_))
+      }
+      p <- ""  # Set to empty string for further processing
+    }
+    
+    # Initialize subfamily
+    subfamily <- NA_character_
+    
+    # Check for IS element families first (for subfamily detection)
+    if (grepl("IS\\d+", p, ignore.case = TRUE)) {
+      is_match <- str_extract(p, "IS\\d+")
+      subfamily <- paste0(is_match, " family")
+    }
+    
+    # Main functional classification
+    functional_class <- case_when(
+      grepl("transposase", p, ignore.case = TRUE) ~ "Transposase",
+      grepl("hypothetical", p, ignore.case = TRUE) ~ "Hypothetical protein",
+      grepl("putative", p, ignore.case = TRUE) ~ "Putative protein",
+      grepl("^23S ribosomal RNA", p, ignore.case = TRUE) ~ "rRNA",
+      grepl("ribosomal RNA", p, ignore.case = TRUE) ~ "rRNA",
+      grepl("adhesin", p, ignore.case = TRUE) ~ "Adhesin",
+      grepl("flagellin|flagellar", p, ignore.case = TRUE) ~ "Flagellar proteins",
+      grepl("restriction enzyme|EcoKI specificity", p, ignore.case = TRUE) ~ "Restriction-modification",
+      grepl("phosphomanno|phosphogluco|malic enzyme|amidohydrolase|hydrolase|mutase", p, ignore.case = TRUE) ~ "Metabolic enzyme",
+      grepl("chaperone", p, ignore.case = TRUE) ~ "Chaperone",
+      grepl("competence protein", p, ignore.case = TRUE) ~ "Competence",
+      grepl("toxin|antitoxin", p, ignore.case = TRUE) ~ "Toxin-antitoxin system",
+      grepl("phage|capsid|tail", p, ignore.case = TRUE) ~ "Phage-associated",
+      grepl("ESAT-6|Esx|type VII|ESX-", p, ignore.case = TRUE) ~ "ESX secretion family",
+      grepl("ABC transporter", p, ignore.case = TRUE) ~ "ABC transporter",
+      grepl("transporter|efflux pump|uptake", p, ignore.case = TRUE) ~ "Transporter",
+      grepl("kinase", p, ignore.case = TRUE) ~ "Signaling",
+      grepl("dehydrogenase|ligase|reductase|synthase|oxygenase", p, ignore.case = TRUE) ~ "Enzyme",
+      grepl("ribosomal protein", p, ignore.case = TRUE) ~ "Ribosomal protein",
+      grepl("catalase-peroxidase", p, ignore.case = TRUE) ~ "Oxidative stress",
+      grepl("partition protein|Smc", p, ignore.case = TRUE) ~ "Chromosome partition",
+      grepl("coagulase", p, ignore.case = TRUE) ~ "Coagulase",
+      !is.na(g) && g %in% c("rho", "nusA") ~ "Regulatory",
+      !is.na(g) && g %in% c("rpfA", "rpfE") ~ "Dormancy/Resuscitation",
+      grepl("repeat(-|_)?containing|repeat", p, ignore.case = TRUE) ~ "Adhesin",
+      grepl("ase$", p, ignore.case = TRUE) ~ "Enzyme",
+      is.na(p) & is.na(g) ~ NA_character_,
+      TRUE ~ "Other"
+    )
+    
+    # Additional subfamily detection for other gene types
+    if (is.na(subfamily)) {
+      if (grepl("PE\\d+|PPE\\d+", p, ignore.case = TRUE)) {
+        subfamily <- str_extract(p, "PE\\d+|PPE\\d+")
+      } else if (grepl("ESX-\\d+", p, ignore.case = TRUE)) {
+        subfamily <- str_extract(p, "ESX-\\d+")
+      }
+    }
+    
+    return(list(functional_class = functional_class, subfamily = subfamily))
+  }
+  
+  # Extract locus tags as fallback for gene names if needed
+  if ("attributes" %in% colnames(gff_regions)) {
+    gff_regions <- gff_regions %>%
+      mutate(
+        locus_tag = str_extract(attributes, "(?<=locus_tag=)[^;]+"),
+        gene_id = coalesce(
+          ifelse(is.na(gene) | gene == "", NA_character_, gene),
+          locus_tag,
+          paste0("gene_", row_number())
+        )
+      )
+  } else {
+    gff_regions <- gff_regions %>%
+      mutate(
+        gene_id = coalesce(
+          ifelse(is.na(gene) | gene == "", NA_character_, gene),
+          paste0("gene_", row_number())
+        )
+      )
+  }
+  
+  # Add functional classification to gff_regions
+  gene_functions <- pmap_dfr(
+    list(gff_regions$gene_id, gff_regions$product),
+    ~ classify_gene_function(.x, .y)
+  )
+  
+  gff_regions <- gff_regions %>%
+    bind_cols(gene_functions)
+  
+  # --- Step 1: Define gene-length thresholds ---
+  gene_lengths <- gff_regions$width
+  gene_length_bounds <- quantile(gene_lengths, probs = gene_length_percentiles)
+  
+  cat("Gene length distribution:\n")
+  cat(sprintf("  5th percentile: %s bp\n", gene_length_bounds[1]))
+  cat(sprintf("  95th percentile: %s bp\n", gene_length_bounds[2]))
+  cat(sprintf("  Median gene length: %d bp\n", median(gene_lengths)))
+  cat(sprintf("  Mean gene length: %d bp\n", round(mean(gene_lengths))))
+  
+  # Print functional class distribution
+  cat("\nGene functional classification distribution:\n")
+  func_table <- table(gff_regions$functional_class, useNA = "ifany")
+  func_df <- data.frame(
+    Class = names(func_table),
+    Count = as.vector(func_table),
+    Percentage = round(100 * as.vector(func_table) / nrow(gff_regions), 1)
+  )
+  print(func_df[order(func_df$Count, decreasing = TRUE)[1:min(10, nrow(func_df))], ])
+  
+  # --- Step 2: Create gene ranges ---
+  gff_ranges <- IRanges(start = gff_regions$start, end = gff_regions$end)
+  
+  # For genic vs intergenic classification
+  if (exists("coding") && exists("RNA")) {
+    genic_regions <- reduce(c(coding, RNA))
+  } else {
+    # Use all GFF features as genic regions
+    genic_regions <- reduce(gff_ranges)
+    cat("\nNote: Using all GFF features for genic/intergenic classification\n")
+  }
+  
+  # Calculate genome coverage
+  genome_genic_fraction <- sum(width(genic_regions)) / max(gff_regions$end)
+  cat(sprintf("\nGenome genic fraction: %.1f%%\n", 100 * genome_genic_fraction))
+  
+  # --- Step 3: Classify SV sizes ---
+  comp_tib_annotated <- comp_tib %>%
+    mutate(
+      size_category = case_when(
+        width < 100 ~ "very_small",
+        width < gene_length_bounds[1] ~ "small",
+        width >= gene_length_bounds[1] & width <= gene_length_bounds[2] ~ "gene_length",
+        width > gene_length_bounds[2] & width <= 10000 ~ "large",
+        width > 10000 ~ "very_large",
+        TRUE ~ "unclassified"
+      ),
+      is_gene_length = width >= gene_length_bounds[1] & width <= gene_length_bounds[2]
+    )
+  
+  # --- Step 4: Find genes disrupted by breakpoints ---
+  breakpoint_window <- 5  # small window around breakpoint
+  
+  sv_start_ranges <- IRanges(
+    start = pmax(1, comp_tib$start - breakpoint_window),
+    end = comp_tib$start + breakpoint_window
+  )
+  sv_end_ranges <- IRanges(
+    start = pmax(1, comp_tib$end - breakpoint_window),
+    end = comp_tib$end + breakpoint_window
+  )
+  
+  # Find genes hit by start breakpoints
+  start_hits <- findOverlaps(sv_start_ranges, gff_ranges)
+  start_disrupted <- data.frame(
+    sv_idx = queryHits(start_hits),
+    gene_idx = subjectHits(start_hits),
+    breakpoint = "start"
+  ) %>%
+    mutate(
+      gene = gff_regions$gene_id[gene_idx],
+      product = gff_regions$product[gene_idx],
+      functional_class = gff_regions$functional_class[gene_idx],
+      subfamily = gff_regions$subfamily[gene_idx],
+      gene_start = gff_regions$start[gene_idx],
+      gene_end = gff_regions$end[gene_idx]
+    )
+  
+  # Find genes hit by end breakpoints
+  end_hits <- findOverlaps(sv_end_ranges, gff_ranges)
+  end_disrupted <- data.frame(
+    sv_idx = queryHits(end_hits),
+    gene_idx = subjectHits(end_hits),
+    breakpoint = "end"
+  ) %>%
+    mutate(
+      gene = gff_regions$gene_id[gene_idx],
+      product = gff_regions$product[gene_idx],
+      functional_class = gff_regions$functional_class[gene_idx],
+      subfamily = gff_regions$subfamily[gene_idx],
+      gene_start = gff_regions$start[gene_idx],
+      gene_end = gff_regions$end[gene_idx]
+    )
+  
+  # Combine all disrupted genes
+  all_disrupted <- bind_rows(start_disrupted, end_disrupted) %>%
+    group_by(sv_idx) %>%
+    summarise(
+      n_genes_disrupted = n_distinct(gene_idx),
+      disrupted_genes = paste(unique(gene), collapse = "; "),
+      disrupted_products = paste(unique(product), collapse = "; "),
+      disrupted_functions = paste(unique(na.omit(functional_class)), collapse = "; "),
+      disrupted_subfamilies = paste(unique(na.omit(subfamily)), collapse = "; "),
+      breakpoints_in_genes = paste(unique(breakpoint), collapse = ","),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      disrupted_products = substr(disrupted_products, 1, 100),
+      disrupted_functions = ifelse(disrupted_functions == "", NA_character_, disrupted_functions),
+      disrupted_subfamilies = ifelse(disrupted_subfamilies == "", NA_character_, disrupted_subfamilies)
+    )
+  
+  # --- Step 5: Enhanced gene overlap analysis for gene-length SVs ---
+  sv_ranges <- IRanges(start = comp_tib$start, end = comp_tib$end)
+  
+  # Only check reciprocal overlap for gene-length SVs
+  gene_length_indices <- which(comp_tib_annotated$is_gene_length)
+  
+  if (length(gene_length_indices) > 0) {
+    overlaps <- findOverlaps(sv_ranges[gene_length_indices], gff_ranges)
+    
+    # Calculate all overlaps
+    gene_overlap_stats <- data.frame(
+      sv_idx = gene_length_indices[queryHits(overlaps)],
+      gene_idx = subjectHits(overlaps)
+    ) %>%
+      mutate(
+        sv_width = width(sv_ranges[sv_idx]),
+        gene_width = gff_regions$width[gene_idx],
+        gene_name = gff_regions$gene_id[gene_idx],
+        gene_product = gff_regions$product[gene_idx],
+        gene_function = gff_regions$functional_class[gene_idx],
+        gene_subfamily = gff_regions$subfamily[gene_idx],
+        overlap_width = width(pintersect(sv_ranges[sv_idx], gff_ranges[gene_idx])),
+        reciprocal_overlap = overlap_width / pmin(sv_width, gene_width),
+        fraction_of_sv = overlap_width / sv_width,
+        fraction_of_gene = overlap_width / gene_width
+      )
+    
+    # Summarize for each SV
+    gene_summary <- gene_overlap_stats %>%
+      group_by(sv_idx) %>%
+      arrange(desc(reciprocal_overlap)) %>%
+      summarise(
+        # Primary gene (best reciprocal overlap)
+        primary_gene = gene_name[1],
+        primary_product = gene_product[1],
+        primary_function = gene_function[1],
+        primary_subfamily = gene_subfamily[1],
+        reciprocal_overlap = reciprocal_overlap[1],
+        
+        # Count of genes
+        n_genes_overlapped = n(),
+        
+        # All genes with significant overlap
+        significant_genes = paste(
+          unique(gene_name[reciprocal_overlap >= secondary_overlap_threshold]),
+          collapse = "; "
+        ),
+        
+        # Functions of overlapped genes
+        overlapped_functions = paste(
+          unique(na.omit(gene_function[reciprocal_overlap >= secondary_overlap_threshold])),
+          collapse = "; "
+        ),
+        
+        overlapped_subfamilies = paste(
+          unique(na.omit(gene_subfamily[reciprocal_overlap >= secondary_overlap_threshold])),
+          collapse = "; "
+        ),
+        
+        # Complete genes (>95% covered)
+        complete_genes = paste(
+          unique(gene_name[fraction_of_gene >= 0.95]),
+          collapse = "; "
+        ),
+        n_complete_genes = sum(fraction_of_gene >= 0.95),
+        
+        # Interpretation
+        multi_gene_type = case_when(
+          n() == 1 & reciprocal_overlap[1] >= reciprocal_overlap_threshold ~ "single_gene",
+          sum(fraction_of_gene >= 0.95) > 1 ~ "multi_gene_complete",
+          sum(reciprocal_overlap >= secondary_overlap_threshold) > 1 ~ "multi_gene_partial",
+          n() > 1 ~ "gene_with_neighbors",
+          TRUE ~ "single_gene"
+        ),
+        .groups = 'drop'
+      ) %>%
+      mutate(
+        # Gene-sized SV designation
+        gene_sized_match = ifelse(reciprocal_overlap >= reciprocal_overlap_threshold, primary_gene, NA_character_),
+        gene_sized_product = ifelse(reciprocal_overlap >= reciprocal_overlap_threshold, primary_product, NA_character_),
+        gene_sized_function = ifelse(reciprocal_overlap >= reciprocal_overlap_threshold, primary_function, NA_character_),
+        
+        # If multiple complete genes, list them
+        gene_sized_match = ifelse(
+          n_complete_genes > 1 & is.na(gene_sized_match),
+          complete_genes,
+          gene_sized_match
+        ),
+        
+        # Clean up empty strings
+        overlapped_functions = ifelse(overlapped_functions == "", NA_character_, overlapped_functions),
+        overlapped_subfamilies = ifelse(overlapped_subfamilies == "", NA_character_, overlapped_subfamilies)
+      ) %>%
+      select(sv_idx, reciprocal_overlap, gene_sized_match, gene_sized_product, gene_sized_function,
+             primary_function, primary_subfamily, n_genes_overlapped, significant_genes, 
+             overlapped_functions, overlapped_subfamilies, complete_genes, n_complete_genes, multi_gene_type)
+    
+  } else {
+    gene_summary <- data.frame(
+      sv_idx = integer(),
+      reciprocal_overlap = numeric(),
+      gene_sized_match = character(),
+      gene_sized_product = character(),
+      gene_sized_function = character(),
+      primary_function = character(),
+      primary_subfamily = character(),
+      n_genes_overlapped = integer(),
+      significant_genes = character(),
+      overlapped_functions = character(),
+      overlapped_subfamilies = character(),
+      complete_genes = character(),
+      n_complete_genes = integer(),
+      multi_gene_type = character()
+    )
+  }
+  
+  # --- Step 6: Classify breakpoint locations (genic vs intergenic) ---
+  sv_starts <- IRanges(start = comp_tib$start, width = 1)
+  sv_ends <- IRanges(start = comp_tib$end, width = 1)
+  
+  start_in_gene <- overlapsAny(sv_starts, genic_regions)
+  end_in_gene <- overlapsAny(sv_ends, genic_regions)
+  
+  # --- Step 7: Combine all annotations ---
+  comp_tib_annotated <- comp_tib_annotated %>%
+    mutate(sv_idx = row_number()) %>%
+    # Add disrupted gene information
+    left_join(all_disrupted, by = "sv_idx") %>%
+    # Add gene overlap information
+    left_join(gene_summary, by = "sv_idx") %>%
+    # Add breakpoint classifications
+    mutate(
+      start_in_gene = start_in_gene,
+      end_in_gene = end_in_gene,
+      breakpoint_class = case_when(
+        start_in_gene & end_in_gene ~ "both_genic",
+        start_in_gene | end_in_gene ~ "one_genic",
+        !start_in_gene & !end_in_gene ~ "both_intergenic",
+        TRUE ~ "unknown"
+      ),
+      
+      # Clean up NAs
+      n_genes_disrupted = replace_na(n_genes_disrupted, 0),
+      reciprocal_overlap = replace_na(reciprocal_overlap, 0),
+      n_genes_overlapped = replace_na(n_genes_overlapped, 0),
+      n_complete_genes = replace_na(n_complete_genes, 0),
+      
+      # Gene-sized SV determination
+      is_gene_sized_sv = case_when(
+        is_gene_length & reciprocal_overlap >= reciprocal_overlap_threshold ~ TRUE,
+        is_gene_length & n_complete_genes > 0 ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      
+      # Detect IS elements and PE/PPE genes
+      is_element = str_detect(coalesce(complete_genes, significant_genes, disrupted_genes, ""), 
+                              "IS[0-9]|transposase|IS[A-Z]") |
+                   str_detect(coalesce(overlapped_functions, disrupted_functions, ""), "Transposase"),
+      
+      is_pe_ppe = str_detect(coalesce(complete_genes, significant_genes, disrupted_genes, ""), 
+                             "PE[0-9]|PPE[0-9]|\\bPE\\b|\\bPPE\\b"),
+      
+      # Extract IS family if present
+      is_family = case_when(
+        !is.na(overlapped_subfamilies) ~ overlapped_subfamilies,
+        !is.na(disrupted_subfamilies) ~ disrupted_subfamilies,
+        !is.na(primary_subfamily) ~ primary_subfamily,
+        TRUE ~ NA_character_
+      ),
+      
+      # Final annotation
+      sv_annotation = case_when(
+        # Gene-sized SVs
+        is_gene_sized_sv & multi_gene_type == "single_gene" ~ 
+          paste0("gene_sized:", gene_sized_match, 
+                 ifelse(!is.na(gene_sized_function), paste0("[", gene_sized_function, "]"), "")),
+        is_gene_sized_sv & multi_gene_type == "multi_gene_complete" ~ 
+          paste0("multi_gene_sized:", n_complete_genes, "_genes"),
+        is_gene_sized_sv & multi_gene_type == "multi_gene_partial" ~ 
+          paste0("complex_gene_sized:", str_sub(significant_genes, 1, 30)),
+        
+        # Disruptions
+        n_genes_disrupted > 1 ~ "multi_gene_disruption",
+        n_genes_disrupted == 1 ~ paste0("single_gene_disruption",
+                                        ifelse(!is.na(disrupted_functions), 
+                                               paste0("[", disrupted_functions, "]"), "")),
+        
+        # Gene-length but intergenic
+        is_gene_length & breakpoint_class == "both_intergenic" ~ "gene_length_intergenic",
+        
+        # Other intergenic
+        breakpoint_class == "both_intergenic" & size_category == "very_small" ~ "small_intergenic_indel",
+        breakpoint_class == "both_intergenic" ~ "intergenic_sv",
+        TRUE ~ "unclassified"
+      )
+    ) %>%
+    select(-sv_idx)
+  
+  # --- Step 8: Summary statistics ---
+  cat("\n=== SV Classification Summary ===\n")
+  cat("\nSize categories:\n")
+  print(table(comp_tib_annotated$size_category))
+  
+  cat("\nBreakpoint classifications:\n")
+  print(table(comp_tib_annotated$breakpoint_class))
+  
+  # Calculate expected intergenic percentage more accurately
+  # For small SVs, use independence assumption
+  # For larger SVs, the expectation is more complex
+  median_sv_width <- median(comp_tib_annotated$width)
+  
+  # Simple approximation: if SVs are small relative to intergenic regions, use (1-genic)^2
+  # If SVs span significant genome fraction, expectation approaches (1-genic)
+  # Use a weighted average based on SV sizes
+  small_sv_fraction <- sum(comp_tib_annotated$width < 1000) / nrow(comp_tib_annotated)
+  expected_intergenic <- small_sv_fraction * (1 - genome_genic_fraction)^2 + 
+                         (1 - small_sv_fraction) * (1 - genome_genic_fraction)
+  
+  observed_intergenic <- sum(comp_tib_annotated$breakpoint_class == "both_intergenic") / nrow(comp_tib_annotated)
+  
+  cat(sprintf("\nIntergenic enrichment: %.2fx (observed: %.1f%%, expected: %.1f%%)\n",
+              observed_intergenic / expected_intergenic,
+              100 * observed_intergenic,
+              100 * expected_intergenic))
+  cat(sprintf("  Note: Median SV width = %d bp\n", median_sv_width))
+  
+  cat("\nGene disruptions:\n")
+  cat(sprintf("  SVs disrupting genes: %d (%.1f%%)\n",
+              sum(comp_tib_annotated$n_genes_disrupted > 0),
+              100 * sum(comp_tib_annotated$n_genes_disrupted > 0) / nrow(comp_tib_annotated)))
+  
+  cat("\nGene-sized SVs:", sum(comp_tib_annotated$is_gene_length), "\n")
+  cat("  Complete gene matches:", sum(comp_tib_annotated$is_gene_sized_sv), "\n")
+  
+  if (any(comp_tib_annotated$is_element)) {
+    cat("  IS element related:", sum(comp_tib_annotated$is_element), "\n")
+    
+    # Show IS family distribution if present
+    if (any(!is.na(comp_tib_annotated$is_family[comp_tib_annotated$is_element]))) {
+      cat("\n  IS family distribution:\n")
+      is_families <- comp_tib_annotated$is_family[comp_tib_annotated$is_element]
+      is_table <- table(is_families[!is.na(is_families)])
+      if (length(is_table) > 0) {
+        print(is_table)
+      }
+    }
+  }
+  
+  if (any(comp_tib_annotated$is_pe_ppe)) {
+    cat("  PE/PPE related:", sum(comp_tib_annotated$is_pe_ppe), "\n")
+  }
+  
+  # Show functional class distribution of affected genes
+  if (any(!is.na(comp_tib_annotated$disrupted_functions)) || 
+      any(!is.na(comp_tib_annotated$overlapped_functions))) {
+    cat("\nFunctional classes of affected genes:\n")
+    all_functions <- c(
+      unlist(str_split(comp_tib_annotated$disrupted_functions[!is.na(comp_tib_annotated$disrupted_functions)], "; ")),
+      unlist(str_split(comp_tib_annotated$overlapped_functions[!is.na(comp_tib_annotated$overlapped_functions)], "; "))
+    )
+    if (length(all_functions) > 0) {
+      func_table <- table(all_functions)
+      func_df <- data.frame(
+        Function = names(func_table),
+        Count = as.vector(func_table)
+      )
+      print(func_df[order(func_df$Count, decreasing = TRUE)[1:min(10, nrow(func_df))], ])
+    }
+  }
+  
+  return(comp_tib_annotated)
+}
+
+create_sv_summary_tables <- function(asv, genome_id = NULL) {
+  #' Create comprehensive summary tables from annotated SV results
+  #' 
+  #' @param asv Output from annotate_SVs function
+  #' @param genome_id Optional identifier for the genome
+  #' @return List of summary tables
+  
+  require(tidyverse)
+  
+  # Add genome ID if provided
+  if (!is.null(genome_id)) {
+    asv <- asv %>% mutate(genome = genome_id)
+  }
+  
+  # --- Table 1: Overall Summary ---
+  overall_summary <- tibble(
+    genome = genome_id %||% "genome",
+    total_svs = nrow(asv),
+    total_bp_affected = sum(asv$width),
+    
+    # Size distribution
+    n_very_small = sum(asv$size_category == "very_small"),
+    n_small = sum(asv$size_category == "small"),
+    n_gene_length = sum(asv$size_category == "gene_length"),
+    n_large = sum(asv$size_category == "large"),
+    n_very_large = sum(asv$size_category == "very_large"),
+    
+    # Variant types
+    n_indels = sum(asv$variant == "Indel", na.rm = TRUE),
+    n_duplications = sum(asv$variant == "Duplication", na.rm = TRUE),
+    n_inversions = sum(asv$variant == "Inversion", na.rm = TRUE),
+    n_translocations = sum(asv$variant == "Translocation", na.rm = TRUE),
+    
+    # Breakpoint locations
+    n_both_genic = sum(asv$breakpoint_class == "both_genic"),
+    n_one_genic = sum(asv$breakpoint_class == "one_genic"),
+    n_both_intergenic = sum(asv$breakpoint_class == "both_intergenic"),
+    pct_intergenic = round(100 * n_both_intergenic / total_svs, 1),
+    
+    # Gene-level stats
+    n_gene_sized_svs = sum(asv$is_gene_sized_sv),
+    n_svs_disrupting_genes = sum(asv$n_genes_disrupted > 0),
+    total_genes_disrupted = sum(asv$n_genes_disrupted),
+    
+    # Special categories
+    n_is_elements = sum(asv$is_element, na.rm = TRUE),
+    n_pe_ppe = sum(asv$is_pe_ppe, na.rm = TRUE)
+  )
+  
+  # --- Table 2: Gene-Sized SVs Detail ---
+  gene_sized_detail <- asv %>%
+    filter(is_gene_sized_sv) %>%
+    select(
+      start, end, width, variant,
+      gene = gene_sized_match,
+      product = gene_sized_product,
+      reciprocal_overlap,
+      n_complete_genes,
+      multi_gene_type,
+      is_element, is_pe_ppe
+    ) %>%
+    mutate(
+      gene = ifelse(is.na(gene) | gene == "", "unnamed", gene),
+      product = substr(product, 1, 50)
+    ) %>%
+    arrange(desc(reciprocal_overlap))
+  
+  # --- Table 3: Gene Frequency Table ---
+  gene_frequency <- asv %>%
+    filter(is_gene_sized_sv) %>%
+    mutate(genes = str_split(gene_sized_match, "; ")) %>%
+    unnest(genes) %>%
+    filter(!is.na(genes), genes != "") %>%
+    count(genes, name = "n_occurrences") %>%
+    arrange(desc(n_occurrences))
+  
+  # --- Table 4: Non-Gene-Sized SV Breakpoints ---
+  breakpoint_analysis <- asv %>%
+    filter(!is_gene_sized_sv) %>%
+    group_by(size_category, breakpoint_class) %>%
+    summarise(
+      count = n(),
+      median_width = median(width),
+      .groups = 'drop'
+    ) %>%
+    pivot_wider(
+      names_from = breakpoint_class,
+      values_from = count,
+      values_fill = 0
+    ) %>%
+    mutate(
+      total = both_genic + one_genic + both_intergenic,
+      pct_intergenic = round(100 * both_intergenic / total, 1)
+    )
+  
+  # --- Table 5: Variant Type Summary ---
+  variant_summary <- asv %>%
+    group_by(variant) %>%
+    summarise(
+      n_total = n(),
+      n_gene_sized = sum(is_gene_sized_sv),
+      n_disrupting = sum(n_genes_disrupted > 0),
+      n_intergenic = sum(breakpoint_class == "both_intergenic"),
+      median_size = median(width),
+      pct_gene_sized = round(100 * n_gene_sized / n_total, 1),
+      pct_intergenic = round(100 * n_intergenic / n_total, 1),
+      .groups = 'drop'
+    ) %>%
+    arrange(desc(n_total))
+  
+  # --- Table 6: Multi-Gene Events ---
+  multi_gene_events <- asv %>%
+    filter(n_complete_genes > 1) %>%
+    select(
+      start, end, width, variant,
+      n_complete_genes,
+      complete_genes,
+      multi_gene_type
+    ) %>%
+    arrange(desc(n_complete_genes))
+  
+  # --- Table 7: Intergenic Enrichment by Size ---
+  intergenic_enrichment <- asv %>%
+    group_by(size_category) %>%
+    summarise(
+      n_total = n(),
+      n_intergenic = sum(breakpoint_class == "both_intergenic"),
+      pct_intergenic = round(100 * n_intergenic / n_total, 1),
+      median_width = median(width),
+      .groups = 'drop'
+    ) %>%
+    arrange(factor(size_category, 
+                   levels = c("very_small", "small", "gene_length", "large", "very_large")))
+  
+  return(list(
+    overall = overall_summary,
+    gene_sized = gene_sized_detail,
+    gene_frequency = gene_frequency,
+    breakpoints = breakpoint_analysis,
+    variants = variant_summary,
+    multi_gene = multi_gene_events,
+    intergenic_enrichment = intergenic_enrichment
+  ))
+}
+
+# Function to print nice formatted summaries
+print_sv_summary <- function(summary_list) {
+  #' Print formatted summary tables
+  #' 
+  #' @param summary_list Output from create_sv_summary_tables
+  
+  cat("\n========================================\n")
+  cat("         SV ANALYSIS SUMMARY\n")
+  cat("========================================\n")
+  
+  # Overall stats
+  cat("\n--- OVERALL STATISTICS ---\n")
+  o <- summary_list$overall
+  cat(sprintf("Total SVs: %d\n", o$total_svs))
+  cat(sprintf("Total bp affected: %s\n", format(o$total_bp_affected, big.mark = ",")))
+  cat(sprintf("Gene-sized SVs: %d (%.1f%%)\n", 
+              o$n_gene_sized_svs, 100*o$n_gene_sized_svs/o$total_svs))
+  cat(sprintf("Both breakpoints intergenic: %d (%.1f%%)\n", 
+              o$n_both_intergenic, o$pct_intergenic))
+  cat(sprintf("SVs disrupting genes: %d (%.1f%%)\n", 
+              o$n_svs_disrupting_genes, 100*o$n_svs_disrupting_genes/o$total_svs))
+  
+  # Variant breakdown
+  cat("\n--- VARIANT TYPES ---\n")
+  print(summary_list$variants %>% select(-contains("pct")), n = 10)
+  
+  # Top genes
+  cat("\n--- TOP 10 GENES IN SVS ---\n")
+  print(summary_list$gene_frequency %>% head(10))
+  
+  # Intergenic enrichment
+  cat("\n--- INTERGENIC ENRICHMENT BY SIZE ---\n")
+  print(summary_list$intergenic_enrichment)
+  
+  # Multi-gene events
+  if (nrow(summary_list$multi_gene) > 0) {
+    cat("\n--- MULTI-GENE EVENTS (top 5) ---\n")
+    print(summary_list$multi_gene %>% 
+            select(variant, n_complete_genes, width) %>% 
+            head(5))
+  }
+}
+
+# Function to export all tables
+export_sv_summary <- function(summary_list, prefix = "sv_summary") {
+  #' Export all summary tables to TSV files
+  #' 
+  #' @param summary_list Output from create_sv_summary_tables
+  #' @param prefix Filename prefix
+  
+  write_tsv(summary_list$overall, paste0(prefix, "_overall.tsv"))
+  write_tsv(summary_list$gene_sized, paste0(prefix, "_gene_sized.tsv"))
+  write_tsv(summary_list$gene_frequency, paste0(prefix, "_gene_frequency.tsv"))
+  write_tsv(summary_list$breakpoints, paste0(prefix, "_breakpoints.tsv"))
+  write_tsv(summary_list$variants, paste0(prefix, "_variants.tsv"))
+  write_tsv(summary_list$multi_gene, paste0(prefix, "_multi_gene.tsv"))
+  write_tsv(summary_list$intergenic_enrichment, paste0(prefix, "_intergenic.tsv"))
+  
+  cat(sprintf("Exported 7 tables with prefix '%s'\n", prefix))
+}
+
+# Quick one-liner summary
+quick_stats <- function(asv) {
+  #' Get key statistics in one line
+  #' 
+  #' @param asv Annotated SV output
+  
+  tibble(
+    n_svs = nrow(asv),
+    pct_gene_sized = round(100 * sum(asv$is_gene_sized_sv) / nrow(asv), 1),
+    pct_intergenic = round(100 * sum(asv$breakpoint_class == "both_intergenic") / nrow(asv), 1),
+    pct_disrupting = round(100 * sum(asv$n_genes_disrupted > 0) / nrow(asv), 1),
+    n_unique_genes = n_distinct(unlist(str_split(asv$gene_sized_match, "; "))),
+    median_sv_size = median(asv$width)
+  )
+}
+
+# Usage:
+# asv <- annotate_SVs(comp_tib_i, gff_regions)
+# 
+# # Create all summary tables
+# summaries <- create_sv_summary_tables(asv, genome_id = "NZ_AP017901.1")
+# 
+# # Print formatted summary
+# print_sv_summary(summaries)
+# 
+# # Get specific table
+# summaries$gene_frequency %>% head(20)
+# 
+# # Export all tables
+# export_sv_summary(summaries, "my_genome")
+# 
+# # Quick stats
+# quick_stats(asv)
+```
+
+
+
+
+```{r}
+annotate_SVs <- function(comp_tib, gff_regions, 
+                         gene_length_percentiles = c(0.05, 0.95),
+                         reciprocal_overlap_threshold = 0.8,
+                         secondary_overlap_threshold = 0.5) {
+  #' Annotate structural variants based on breakpoint disruptions and gene transfers
+  #' 
+  #' @param comp_tib Tibble with SV data (must have start, end, width, variant columns)
+  #' @param gff_regions GFF tibble with gene annotations
+  #' @param gene_length_percentiles Vector of two values for gene length bounds (default: 5th-95th percentile)
+  #' @param reciprocal_overlap_threshold Minimum overlap fraction to call gene transfer (default: 0.8)
+  #' @param secondary_overlap_threshold Minimum overlap to report secondary genes (default: 0.5)
+  #' 
+  #' @return Annotated tibble with breakpoint disruptions and gene annotations
+  
+  require(IRanges)
+  require(tidyverse)
+  
+  # --- Step 1: Define gene-length thresholds ---
+  gene_lengths <- gff_regions$width
+  gene_length_bounds <- quantile(gene_lengths, probs = gene_length_percentiles)
+  
+  cat("Gene length distribution:\n")
+  cat(sprintf("  5th percentile: %s bp\n", gene_length_bounds[1]))
+  cat(sprintf("  95th percentile: %s bp\n", gene_length_bounds[2]))
+  cat(sprintf("  Median gene length: %d bp\n", median(gene_lengths)))
+  cat(sprintf("  Mean gene length: %d bp\n", round(mean(gene_lengths))))
+  
+  # --- Step 2: Create gene ranges ---
+  gff_ranges <- IRanges(start = gff_regions$start, end = gff_regions$end)
+  
+  # For genic vs intergenic classification (assuming coding and RNA are defined elsewhere)
+  # If not available, use all annotated features as genic
+  if (exists("coding") && exists("RNA")) {
+    genic_regions <- reduce(c(coding, RNA))
+  } else {
+    # Fallback: use all GFF features as genic regions
+    genic_regions <- reduce(gff_ranges)
+    cat("\nNote: Using all GFF features for genic/intergenic classification\n")
+  }
+  
+  # --- Step 3: Classify SV sizes ---
+  comp_tib_annotated <- comp_tib %>%
+    mutate(
+      size_category = case_when(
+        width < 100 ~ "very_small",
+        width < gene_length_bounds[1] ~ "small",
+        width >= gene_length_bounds[1] & width <= gene_length_bounds[2] ~ "gene_length",
+        width > gene_length_bounds[2] & width <= 10000 ~ "large",
+        width > 10000 ~ "very_large",
+        TRUE ~ "unclassified"
+      ),
+      is_gene_length = width >= gene_length_bounds[1] & width <= gene_length_bounds[2]
+    )
+  
+  # --- Step 4: Find genes disrupted by breakpoints ---
+  # A gene is disrupted if a breakpoint falls within it
+  
+  # Create ranges for each breakpoint (as small windows to catch edge cases)
+  breakpoint_window <- 5  # small window around breakpoint
+  sv_start_ranges <- IRanges(start = pmax(1, comp_tib$start - breakpoint_window), 
+                              end = comp_tib$start + breakpoint_window)
+  sv_end_ranges <- IRanges(start = pmax(1, comp_tib$end - breakpoint_window), 
+                            end = comp_tib$end + breakpoint_window)
+  
+  # Find genes hit by start breakpoints
+  start_hits <- findOverlaps(sv_start_ranges, gff_ranges)
+  start_disrupted <- data.frame(
+    sv_idx = queryHits(start_hits),
+    gene_idx = subjectHits(start_hits),
+    breakpoint = "start"
+  ) %>%
+    mutate(
+      gene = gff_regions$gene[gene_idx],
+      product = gff_regions$product[gene_idx],
+      gene_start = gff_regions$start[gene_idx],
+      gene_end = gff_regions$end[gene_idx]
+    )
+  
+  # Find genes hit by end breakpoints
+  end_hits <- findOverlaps(sv_end_ranges, gff_ranges)
+  end_disrupted <- data.frame(
+    sv_idx = queryHits(end_hits),
+    gene_idx = subjectHits(end_hits),
+    breakpoint = "end"
+  ) %>%
+    mutate(
+      gene = gff_regions$gene[gene_idx],
+      product = gff_regions$product[gene_idx],
+      gene_start = gff_regions$start[gene_idx],
+      gene_end = gff_regions$end[gene_idx]
+    )
+  
+  # Combine all disrupted genes
+  all_disrupted <- bind_rows(start_disrupted, end_disrupted) %>%
+    group_by(sv_idx) %>%
+    summarise(
+      n_genes_disrupted = n_distinct(gene_idx),
+      disrupted_genes = paste(unique(na.omit(gene)), collapse = "; "),
+      disrupted_products = paste(unique(na.omit(product)), collapse = "; "),
+      breakpoints_in_genes = paste(unique(breakpoint), collapse = ","),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      disrupted_genes = ifelse(disrupted_genes == "", "none", disrupted_genes),
+      disrupted_products = ifelse(disrupted_products == "", "none", substr(disrupted_products, 1, 100))
+    )
+  
+  # --- Step 5: Enhanced gene overlap analysis for gene-length SVs ---
+  sv_ranges <- IRanges(start = comp_tib$start, end = comp_tib$end)
+  
+  # Only check reciprocal overlap for gene-length SVs
+  gene_length_indices <- which(comp_tib_annotated$is_gene_length)
+  
+  if (length(gene_length_indices) > 0) {
+    overlaps <- findOverlaps(sv_ranges[gene_length_indices], gff_ranges)
+    
+    # Calculate all overlaps
+    gene_overlap_stats <- data.frame(
+      sv_idx = gene_length_indices[queryHits(overlaps)],
+      gene_idx = subjectHits(overlaps)
+    ) %>%
+      mutate(
+        sv_width = width(sv_ranges[sv_idx]),
+        gene_width = gff_regions$width[gene_idx],
+        gene_name = gff_regions$gene[gene_idx],
+        gene_product = gff_regions$product[gene_idx],
+        overlap_width = width(pintersect(sv_ranges[sv_idx], gff_ranges[gene_idx])),
+        reciprocal_overlap = overlap_width / pmin(sv_width, gene_width),
+        fraction_of_sv = overlap_width / sv_width,
+        fraction_of_gene = overlap_width / gene_width
+      )
+    
+    # Summarize for each SV - handle multiple genes properly
+    gene_summary <- gene_overlap_stats %>%
+      group_by(sv_idx) %>%
+      arrange(desc(reciprocal_overlap)) %>%
+      summarise(
+        # Primary gene (best reciprocal overlap)
+        primary_gene = (gene_name[1]),
+        primary_product = (gene_product[1]),
+        reciprocal_overlap = (reciprocal_overlap[1]),
+        
+        # Count of genes
+        n_genes_overlapped = n(),
+        
+        # All genes with significant overlap
+        significant_genes = paste(
+          unique(gene_name[reciprocal_overlap >= secondary_overlap_threshold]), 
+          collapse = "; "
+        ),
+        significant_products = paste(
+          unique(gene_product[reciprocal_overlap >= secondary_overlap_threshold]), 
+          collapse = "; "
+        ),
+        
+        # Complete genes (>95% covered)
+        complete_genes = paste(
+          unique(gene_name[fraction_of_gene >= 0.95]), 
+          collapse = "; "
+        ),
+        n_complete_genes = sum(fraction_of_gene >= 0.95),
+        
+        # Interpretation
+        multi_gene_type = case_when(
+          n() == 1 & (reciprocal_overlap[1]) >= reciprocal_overlap_threshold ~ 
+            "single_gene",
+          sum(fraction_of_gene >= 0.95) > 1 ~ 
+            "multi_gene_complete",
+          sum(reciprocal_overlap >= secondary_overlap_threshold) > 1 ~
+            "multi_gene_partial",
+          n() > 1 ~
+            "gene_with_neighbors",
+          TRUE ~ 
+            "single_gene"
+        ),
+        
+        .groups = 'drop'
+      ) %>%
+      mutate(
+        # Clean up the primary gene designation
+        transfer_gene = ifelse(reciprocal_overlap >= reciprocal_overlap_threshold, 
+                               primary_gene, NA_character_),
+        transfer_product = ifelse(reciprocal_overlap >= reciprocal_overlap_threshold, 
+                                  primary_product, NA_character_),
+        # If multiple complete genes, list them as the transfer
+        transfer_gene = ifelse(
+          n_complete_genes > 1 & is.na(transfer_gene),
+          complete_genes,
+          transfer_gene
+        )
+      ) %>%
+      select(sv_idx, reciprocal_overlap, transfer_gene, transfer_product,
+             n_genes_overlapped, significant_genes, complete_genes, 
+             n_complete_genes, multi_gene_type)
+    
+  } else {
+    gene_summary <- data.frame(
+      sv_idx = integer(),
+      reciprocal_overlap = numeric(),
+      transfer_gene = character(),
+      transfer_product = character(),
+      n_genes_overlapped = integer(),
+      significant_genes = character(),
+      complete_genes = character(),
+      n_complete_genes = integer(),
+      multi_gene_type = character()
+    )
+  }
+  
+  # --- Step 6: Classify breakpoint locations (genic vs intergenic) ---
+  sv_starts <- IRanges(start = comp_tib$start, width = 1)
+  sv_ends <- IRanges(start = comp_tib$end, width = 1)
+  
+  start_in_gene <- overlapsAny(sv_starts, genic_regions)
+  end_in_gene <- overlapsAny(sv_ends, genic_regions)
+  
+  # --- Step 7: Combine all annotations ---
+  comp_tib_annotated <- 
+    comp_tib_annotated %>%
+    mutate(sv_idx = row_number()) %>%
+    # Add disrupted gene information
+    left_join(all_disrupted, by = "sv_idx") %>%
+    # Add gene overlap information
+    left_join(gene_summary, by = "sv_idx") %>%
+    # Add breakpoint classifications
+    mutate(
+      start_in_gene = start_in_gene,
+      end_in_gene = end_in_gene,
+      breakpoint_class = case_when(
+        start_in_gene & end_in_gene ~ "both_genic",
+        start_in_gene | end_in_gene ~ "one_genic",
+        !start_in_gene & !end_in_gene ~ "both_intergenic",
+        TRUE ~ "unknown"
+      ),
+      # Clean up NAs
+      n_genes_disrupted = replace_na(n_genes_disrupted, 0),
+      reciprocal_overlap = replace_na(reciprocal_overlap, 0),
+      n_genes_overlapped = replace_na(n_genes_overlapped, 0),
+      n_complete_genes = replace_na(n_complete_genes, 0),
+      
+      # Gene transfer determination considers multiple genes
+      is_gene_transfer = case_when(
+        # High reciprocal overlap with single gene
+        is_gene_length & reciprocal_overlap >= reciprocal_overlap_threshold ~ TRUE,
+        # Multiple complete genes within SV
+        is_gene_length & n_complete_genes > 0 ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      
+      # Final annotation with multi-gene awareness
+      sv_annotation = case_when(
+        # Gene transfers
+        is_gene_transfer & multi_gene_type == "single_gene" ~ 
+          paste0("gene_transfer:", transfer_gene),
+        is_gene_transfer & multi_gene_type == "multi_gene_complete" ~ 
+          paste0("multi_gene_transfer:", n_complete_genes, "_genes"),
+        is_gene_transfer & multi_gene_type == "multi_gene_partial" ~ 
+          paste0("complex_gene_transfer:", significant_genes),
+        
+        # Disruptions
+        n_genes_disrupted > 1 ~ "multi_gene_disruption",
+        n_genes_disrupted == 1 ~ "single_gene_disruption",
+        
+        # Gene-length but intergenic
+        is_gene_length & breakpoint_class == "both_intergenic" ~ "gene_length_intergenic",
+        
+        # Other intergenic
+        breakpoint_class == "both_intergenic" & size_category == "very_small" ~ "small_intergenic_indel",
+        breakpoint_class == "both_intergenic" ~ "intergenic_sv",
+        
+        TRUE ~ "unclassified"
+      )
+    ) %>%
+    select(-sv_idx)
+  
+  # --- Step 8: Summary statistics ---
+  cat("\n=== SV Classification Summary ===\n")
+  cat("\nSize categories:\n")
+  print(table(comp_tib_annotated$size_category))
+  
+  cat("\nBreakpoint classifications:\n")
+  print(table(comp_tib_annotated$breakpoint_class))
+  
+  cat("\nGene disruptions:\n")
+  cat(sprintf("  SVs disrupting genes: %d\n", sum(comp_tib_annotated$n_genes_disrupted > 0)))
+  cat(sprintf("  Total genes disrupted: %d\n", sum(comp_tib_annotated$n_genes_disrupted)))
+  
+  cat("\nGene-length SVs:", sum(comp_tib_annotated$is_gene_length), "\n")
+  cat("  Single gene transfers:", sum(comp_tib_annotated$multi_gene_type == "single_gene" & 
+                                         comp_tib_annotated$is_gene_transfer, na.rm = TRUE), "\n")
+  cat("  Multi-gene units:", sum(comp_tib_annotated$multi_gene_type == "multi_gene_complete" & 
+                                    comp_tib_annotated$is_gene_transfer, na.rm = TRUE), "\n")
+  
+  # --- Step 9: Show examples of multi-gene SVs if present ---
+  multi_gene_svs <- comp_tib_annotated %>%
+    filter(n_genes_overlapped > 1, is_gene_length)
+  
+  if (nrow(multi_gene_svs) > 0) {
+    cat("\n=== Multi-Gene SV Examples ===\n")
+    examples <- multi_gene_svs %>%
+      select(variant, width, multi_gene_type, significant_genes, complete_genes) %>%
+      head(5)
+    print(examples)
+  }
+  
+  # --- Step 10: Variant type specific summary ---
+  cat("\n=== Breakpoints by Variant Type ===\n")
+  variant_summary <- comp_tib_annotated %>%
+    group_by(variant) %>%
+    summarise(
+      total = n(),
+      disrupting_genes = sum(n_genes_disrupted > 0),
+      both_intergenic = sum(breakpoint_class == "both_intergenic"),
+      gene_transfers = sum(is_gene_transfer),
+      multi_gene = sum(n_genes_overlapped > 1, na.rm = TRUE),
+      .groups = 'drop'
+    )
+  print(as.data.frame(variant_summary))
+  
+  return(comp_tib_annotated)
+}
+
+# Simplified summary function
+
+# details <- get_breakpoint_details(c(1,2,3), comp_tib_i, gff_regions)
+
+
+
+summarize_sv_annotations <- function(asv) {
+  #' Comprehensive summary of annotated SVs
+  #' 
+  #' @param asv Output from annotate_SVs function
+  #' @return List of summary tables and statistics
+  
+  require(tidyverse)
+  
+  cat("\n========================================\n")
+  cat("       SV ANNOTATION SUMMARY REPORT      \n")
+  cat("========================================\n")
+  
+  # Overall statistics
+  cat("\n--- OVERALL STATISTICS ---\n")
+  cat(sprintf("Total SVs analyzed: %d\n", nrow(asv)))
+  cat(sprintf("Total genome positions affected: %s bp\n", 
+              format(sum(asv$width), big.mark = ",")))
+  
+  # Size distribution
+  cat("\n--- SIZE DISTRIBUTION ---\n")
+  size_summary <- asv %>%
+    group_by(size_category) %>%
+    summarise(
+      count = n(),
+      percent = round(100 * n() / nrow(asv), 1),
+      median_size = median(width),
+      mean_size = round(mean(width)),
+      .groups = 'drop'
+    ) %>%
+    arrange(match(size_category, c("very_small", "small", "gene_length", "large", "very_large")))
+  print(as.data.frame(size_summary))
+  
+  # Breakpoint analysis
+  cat("\n--- BREAKPOINT LOCATIONS ---\n")
+  breakpoint_summary <- asv %>%
+    count(breakpoint_class) %>%
+    mutate(percent = round(100 * n / sum(n), 1)) %>%
+    arrange(desc(n))
+  print(as.data.frame(breakpoint_summary))
+  
+  # Gene disruption analysis
+  cat("\n--- GENE DISRUPTION ANALYSIS ---\n")
+  cat(sprintf("SVs with gene disruptions: %d (%.1f%%)\n", 
+              sum(asv$n_genes_disrupted > 0),
+              100 * sum(asv$n_genes_disrupted > 0) / nrow(asv)))
+  cat(sprintf("Total genes disrupted: %d\n", sum(asv$n_genes_disrupted)))
+  
+  if (sum(asv$n_genes_disrupted > 0) > 0) {
+    disruption_dist <- asv %>%
+      filter(n_genes_disrupted > 0) %>%
+      count(n_genes_disrupted) %>%
+      mutate(description = paste0(n_genes_disrupted, " gene(s) disrupted"))
+    print(as.data.frame(disruption_dist))
+  }
+  
+  # Gene transfer analysis
+  cat("\n--- GENE TRANSFER ANALYSIS ---\n")
+  gene_length_svs <- asv %>% filter(is_gene_length)
+  cat(sprintf("Gene-length SVs: %d\n", nrow(gene_length_svs)))
+  cat(sprintf("Likely gene transfers: %d (%.1f%% of gene-length SVs)\n",
+              sum(asv$is_gene_transfer),
+              100 * sum(asv$is_gene_transfer) / max(nrow(gene_length_svs), 1)))
+  
+  if ("multi_gene_type" %in% colnames(asv) && sum(asv$is_gene_transfer) > 0) {
+    transfer_types <- asv %>%
+      filter(is_gene_transfer) %>%
+      count(multi_gene_type) %>%
+      arrange(desc(n))
+    cat("\nGene transfer types:\n")
+    print(as.data.frame(transfer_types))
+  }
+  
+  # Variant-specific analysis
+  cat("\n--- ANALYSIS BY VARIANT TYPE ---\n")
+  variant_detailed <- asv %>%
+    group_by(variant) %>%
+    summarise(
+      total = n(),
+      gene_disrupting = sum(n_genes_disrupted > 0),
+      intergenic = sum(breakpoint_class == "both_intergenic"),
+      gene_transfers = sum(is_gene_transfer),
+      median_size = median(width),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      pct_disrupting = round(100 * gene_disrupting / total, 1),
+      pct_intergenic = round(100 * intergenic / total, 1)
+    ) %>%
+    arrange(desc(total))
+  print(as.data.frame(variant_detailed))
+  
+  # SV annotation categories
+  cat("\n--- SV ANNOTATION CATEGORIES ---\n")
+  annotation_summary <- asv %>%
+    count(sv_annotation) %>%
+    mutate(percent = round(100 * n / sum(n), 1)) %>%
+    arrange(desc(n))
+  print(head(as.data.frame(annotation_summary), 10))
+  
+  # Multi-gene events
+  if ("n_genes_overlapped" %in% colnames(asv)) {
+    multi_gene_events <- asv %>%
+      filter(n_genes_overlapped > 1)
+    
+    if (nrow(multi_gene_events) > 0) {
+      cat("\n--- MULTI-GENE EVENTS ---\n")
+      cat(sprintf("SVs affecting multiple genes: %d\n", nrow(multi_gene_events)))
+      
+      multi_summary <- multi_gene_events %>%
+        group_by(variant, multi_gene_type) %>%
+        summarise(
+          count = n(),
+          avg_genes = round(mean(n_genes_overlapped), 1),
+          .groups = 'drop'
+        ) %>%
+        arrange(desc(count))
+      print(head(as.data.frame(multi_summary), 10))
+    }
+  }
+  
+  # Return summary list for further analysis
+  invisible(list(
+    size_summary = size_summary,
+    breakpoint_summary = breakpoint_summary,
+    variant_detailed = variant_detailed,
+    annotation_summary = annotation_summary
+  ))
+}
+
+# Quick summary function
+quick_sv_summary <- function(asv) {
+  #' Quick one-line summaries of key findings
+  #' 
+  #' @param asv Output from annotate_SVs function
+  
+  cat("\n=== QUICK SUMMARY ===\n")
+  cat(sprintf("• %d SVs: %d indels, %d duplications, %d inversions, %d translocations\n",
+              nrow(asv),
+              sum(asv$variant == "Indel"),
+              sum(asv$variant == "Duplication"),
+              sum(asv$variant == "Inversion"),
+              sum(asv$variant == "Translocation")))
+  
+  cat(sprintf("• %.1f%% have both breakpoints in intergenic regions\n",
+              100 * sum(asv$breakpoint_class == "both_intergenic") / nrow(asv)))
+  
+  cat(sprintf("• %.1f%% disrupt at least one gene\n",
+              100 * sum(asv$n_genes_disrupted > 0) / nrow(asv)))
+  
+  cat(sprintf("• %d likely gene transfers identified\n",
+              sum(asv$is_gene_transfer)))
+  
+  if ("n_complete_genes" %in% colnames(asv)) {
+    cat(sprintf("• %d SVs contain complete genes (potential operons/clusters)\n",
+                sum(asv$n_complete_genes > 1, na.rm = TRUE)))
+  }
+}
+
+# Export key findings
+export_sv_summary <- function(asv, output_prefix = "sv_summary") {
+  #' Export summary tables to files
+  #' 
+  #' @param asv Output from annotate_SVs function
+  #' @param output_prefix Prefix for output files
+  
+  # Main annotated table
+  write_tsv(asv, paste0(output_prefix, "_annotated.tsv"))
+  
+  # Gene disruptions only
+  if (sum(asv$n_genes_disrupted > 0) > 0) {
+    asv %>%
+      filter(n_genes_disrupted > 0) %>%
+      select(start, end, width, variant, breakpoint_class, 
+             n_genes_disrupted, disrupted_genes, disrupted_products) %>%
+      write_tsv(paste0(output_prefix, "_gene_disruptions.tsv"))
+  }
+  
+  # Gene transfers only  
+  if (sum(asv$is_gene_transfer) > 0) {
+    asv %>%
+      filter(is_gene_transfer) %>%
+      select(start, end, width, variant, transfer_gene, transfer_product,
+             reciprocal_overlap, contains("complete_genes")) %>%
+      write_tsv(paste0(output_prefix, "_gene_transfers.tsv"))
+  }
+  
+  # Summary statistics
+  summary_stats <- summarize_sv_annotations(asv)
+  
+  cat(sprintf("\nFiles exported with prefix '%s'\n", output_prefix))
+}
+
+# Visualization preparation
+prepare_sv_plots <- function(asv) {
+  #' Prepare data for visualization
+  #' 
+  #' @param asv Output from annotate_SVs function
+  #' @return List of plot-ready dataframes
+  
+  # Size distribution by variant type
+  size_by_variant <- asv %>%
+    mutate(log_width = log10(width + 1)) %>%
+    select(variant, width, log_width, breakpoint_class)
+  
+  # Breakpoint enrichment
+  breakpoint_enrichment <- asv %>%
+    group_by(size_category, breakpoint_class) %>%
+    summarise(count = n(), .groups = 'drop') %>%
+    group_by(size_category) %>%
+    mutate(percent = 100 * count / sum(count))
+  
+  # Gene transfer sizes
+  transfer_sizes <- asv %>%
+    filter(is_gene_transfer) %>%
+    select(width, variant, contains("complete_genes"))
+  
+  return(list(
+    size_by_variant = size_by_variant,
+    breakpoint_enrichment = breakpoint_enrichment,
+    transfer_sizes = transfer_sizes
+  ))
+}
+
+# Usage examples:
+ asv <- annotate_SVs(comp_tib, gff_regions)
+# 
+# # Get comprehensive summary
+ summarize_sv_annotations(asv)
+# 
+# # Get quick summary
+quick_sv_summary(asv)
+
+
+asv %>% 
+  filter(sv_annotation == "gene_transfer:NA") %>%
+  dplyr::select(start, end, width, transfer_gene, reciprocal_overlap, disrupted_genes) %>%
+  head()
+# 
+# # Export results
+# export_sv_summary(asv, "my_genome_sv_analysis")
+# 
+# # Prepare for plotting
+# plot_data <- prepare_sv_plots(asv)
+# 
+# # Look at specific categories
+# asv %>% filter(sv_annotation == "gene_transfer") %>% View()
+# asv %>% filter(n_genes_disrupted > 2) %>% View()
+# asv %>% filter(breakpoint_class == "both_intergenic" & size_category == "gene_length") %>% View()
+
+```
+
+
+
+```{r}
+asv %>% 
+  filter(sv_annotation == "gene_transfer:NA") %>% View
+  dplyr::select(complete_genes, significant_genes, n_complete_genes) %>%
+  head()
+asv <- 
+  annotate_SVs(comp_tib, gff_regions)
+
+asv %>%
+  filter(!is_gene_length) %>% count(n_genes_disrupted)
+
+gff_regions %>%
+  filter(is.na(gene))
+gff_regions %>% 
+  filter(start >= 1776474 & end <= 1777798) %>%
+  select(start, end, type, gene, product)
+
+
+
+create_simplified_sv_table <- function(annotated_svs, comp_tib, coding_ranges, gff_regions) {
+  #' Create a simplified SV table with gene product annotations
+  #' 
+  #' @param annotated_svs Output from annotate_SVs() function
+  #' @param comp_tib Original SV tibble
+  #' @param coding_ranges IRanges object with coding sequences
+  #' @param gff_regions GFF tibble with gene annotations
+  #' 
+  #' @return Simplified tibble with SV info and gene products
+  
+  require(IRanges)
+  require(tidyverse)
+  
+  # Create SVs ranges
+  sv_ranges <- IRanges(start = annotated_svs$start, end = annotated_svs$end)
+  
+  # Find all overlaps between SVs and genes
+  overlaps <- findOverlaps(sv_ranges, coding_ranges)
+  
+  # Get gene information for each overlap
+  overlap_details <- data.frame(
+    sv_idx = queryHits(overlaps),
+    gene_idx = subjectHits(overlaps)
+  ) %>%
+    mutate(
+      sv_width = width(sv_ranges[sv_idx]),
+      gene_start = start(coding_ranges)[gene_idx],
+      gene_end = end(coding_ranges)[gene_idx],
+      gene_width = width(coding_ranges)[gene_idx],
+      overlap_width = width(pintersect(sv_ranges[sv_idx], coding_ranges[gene_idx])),
+      reciprocal_overlap = overlap_width / pmin(sv_width, gene_width),
+      fraction_gene_affected = overlap_width / gene_width
+    )
+  
+  # Match gene indices to actual gene annotations
+  # Get gene/product info from gff_regions for CDS features
+  gene_info <- gff_regions %>%
+    filter(type == "CDS") %>%
+    mutate(gene_idx = row_number()) %>%
+    select(gene_idx, gene, product)
+  
+  overlap_details <- overlap_details %>%
+    left_join(gene_info, by = "gene_idx")
+  
+  # For each SV, determine which genes to report
+  gene_annotations <- overlap_details %>%
+    left_join(
+      annotated_svs %>% 
+        mutate(sv_idx = row_number()) %>%
+        select(sv_idx, is_gene_length, is_gene_transfer, breakpoint_class, sv_annotation),
+      by = "sv_idx"
+    ) %>%
+    group_by(sv_idx) %>%
+    mutate(
+      # Determine which gene(s) to report based on SV type
+      should_report = case_when(
+        # For gene transfers, report the best matching gene
+        is_gene_transfer & reciprocal_overlap == max(reciprocal_overlap) ~ TRUE,
+        # For gene-length SVs, report high-overlap genes
+        is_gene_length & reciprocal_overlap >= 0.5 ~ TRUE,
+        # For gene disruptions, report significantly affected genes
+        str_detect(sv_annotation, "disruption") & fraction_gene_affected >= 0.1 ~ TRUE,
+        # For other genic SVs, report affected genes
+        breakpoint_class %in% c("both_genic", "one_genic") & fraction_gene_affected >= 0.1 ~ TRUE,
+        FALSE ~ FALSE
+      )
+    ) %>%
+    filter(should_report) %>%
+    summarise(
+      # Combine gene products into a single string
+      gene_products = paste(
+        unique(
+          case_when(
+            # If product is NA or empty, use gene name
+            is.na(product) | product == "" ~ ifelse(is.na(gene) | gene == "", "hypothetical protein", gene),
+            TRUE ~ product
+          )
+        ),
+        collapse = "; "
+      ),
+      n_genes = n(),
+      # Add details about the nature of the overlap
+      overlap_detail = case_when(
+        max(reciprocal_overlap) >= 0.8 ~ sprintf("high_overlap(%.0f%%)", max(reciprocal_overlap) * 100),
+        max(fraction_gene_affected) >= 0.9 ~ sprintf("gene_disrupted(%.0f%%)", max(fraction_gene_affected) * 100),
+        max(fraction_gene_affected) >= 0.5 ~ sprintf("partial_disruption(%.0f%%)", max(fraction_gene_affected) * 100),
+        TRUE ~ sprintf("affected(%.0f%%)", max(fraction_gene_affected) * 100)
+      ),
+      .groups = 'drop'
+    )
+  
+  # Create the simplified table
+  simplified_table <- annotated_svs %>%
+    mutate(sv_idx = row_number()) %>%
+    left_join(gene_annotations, by = "sv_idx") %>%
+    select(
+      start,
+      end,
+      width,
+      variant,
+      size_category,
+      breakpoint_class,
+      gene_products,
+      overlap_detail,
+      n_genes_affected = n_genes
+    ) %>%
+    mutate(
+      # Clean up the gene_products column
+      gene_products = case_when(
+        is.na(gene_products) & breakpoint_class == "both_intergenic" ~ "intergenic",
+        is.na(gene_products) ~ "no_annotation",
+        TRUE ~ gene_products
+      ),
+      # Simplify overlap details
+      overlap_detail = replace_na(overlap_detail, ""),
+      n_genes_affected = replace_na(n_genes_affected, 0)
+    ) %>%
+    # Shorten long product descriptions
+    mutate(
+      gene_products = ifelse(
+        nchar(gene_products) > 100,
+        paste0(substr(gene_products, 1, 97), "..."),
+        gene_products
+      )
+    )
+  
+  return(simplified_table)
+}
+
+# Alternative: Ultra-simple version with just one product per SV
+create_simple_sv_summary <- function(annotated_svs, comp_tib, coding, gff_regions) {
+  #' Create an ultra-simplified SV table with single best gene product
+  #' 
+  #' @param annotated_svs Output from annotate_SVs() function
+  #' @param comp_tib Original SV tibble  
+  #' @param coding_ranges IRanges object with coding sequences
+  #' @param gff_regions GFF tibble with gene annotations
+  #' 
+  #' @return Simple tibble with one gene product per SV
+  
+  require(IRanges)
+  require(tidyverse)
+  
+  # Create SVs ranges
+  sv_ranges <- IRanges(start = annotated_svs$start, end = annotated_svs$end)
+  
+  # Find overlaps
+  overlaps <- findOverlaps(sv_ranges, coding_ranges)
+  
+  # Get the best gene match for each SV
+  best_gene <- data.frame(
+    sv_idx = queryHits(overlaps),
+    gene_idx = subjectHits(overlaps)
+  ) %>%
+    mutate(
+      sv_width = width(sv_ranges[sv_idx]),
+      gene_start = start(coding_ranges)[gene_idx],
+      gene_end = end(coding_ranges)[gene_idx],
+      gene_width = width(coding_ranges)[gene_idx],
+      overlap_width = width(pintersect(sv_ranges[sv_idx], coding_ranges[gene_idx])),
+      reciprocal_overlap = overlap_width / pmin(sv_width, gene_width),
+      fraction_gene_affected = overlap_width / gene_width
+    ) %>%
+    # Get gene annotations
+    left_join(
+      gff_regions %>%
+        filter(type == "CDS") %>%
+        mutate(gene_idx = row_number()) %>%
+        select(gene_idx, gene, product),
+      by = "gene_idx"
+    ) %>%
+    # Get SV info
+    left_join(
+      annotated_svs %>%
+        mutate(sv_idx = row_number()) %>%
+        select(sv_idx, is_gene_length, breakpoint_class),
+      by = "sv_idx"
+    ) %>%
+    # Score each gene match
+    mutate(
+      score = case_when(
+        is_gene_length ~ reciprocal_overlap,  # For gene-length, prioritize reciprocal overlap
+        TRUE ~ fraction_gene_affected  # For others, prioritize gene disruption
+      )
+    ) %>%
+    # Keep only the best match per SV
+    group_by(sv_idx) %>%
+    slice_max(score, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(
+      # Create annotation string
+      annotation = case_when(
+        !is.na(product) & product != "" ~ product,
+        !is.na(gene) & gene != "" ~ gene,
+        TRUE ~ "hypothetical protein"
+      ),
+      # Add percentage to annotation for context
+      annotation = case_when(
+        is_gene_length & reciprocal_overlap >= 0.8 ~ 
+          sprintf("%s [%.0f%% match]", annotation, reciprocal_overlap * 100),
+        fraction_gene_affected >= 0.5 ~ 
+          sprintf("%s [%.0f%% disrupted]", annotation, fraction_gene_affected * 100),
+        TRUE ~ sprintf("%s [%.0f%% affected]", annotation, fraction_gene_affected * 100)
+      )
+    ) %>%
+    select(sv_idx, annotation)
+  
+  # Build final simple table
+  simple_table <- annotated_svs %>%
+    mutate(sv_idx = row_number()) %>%
+    left_join(best_gene, by = "sv_idx") %>%
+    select(
+      start,
+      end,
+      variant,
+      size_category,
+      breakpoint_class,
+      gene_product = annotation
+    ) %>%
+    mutate(
+      gene_product = case_when(
+        is.na(gene_product) & breakpoint_class == "both_intergenic" ~ "intergenic",
+        is.na(gene_product) ~ "no gene overlap",
+        TRUE ~ gene_product
+      )
+    ) %>%
+    # Truncate long annotations
+    mutate(
+      gene_product = ifelse(
+        nchar(gene_product) > 80,
+        paste0(substr(gene_product, 1, 77), "..."),
+        gene_product
+      )
+    )
+  
+  return(simple_table)
+}
+
+# Usage example:
+ simplified <- create_simplified_sv_table(annotated_svs, comp_tib_i, coding, gff_regions)
+# 
+# # Or use the ultra-simple version:
+ simple <- 
+   create_simple_sv_summary(annotated_svs, comp_tib_i, coding, gff_regions)
+#
+# # View gene-length SVs with their products:
+simple %>%
+  filter(size_category == "gene_length") %>%
+  View()
+#
+# # Export for further analysis:
+# write_tsv(simple, "sv_annotations_simplified.tsv")
+```
+
+
+```{r}
+annotate_SVs <- function(comp_tib, gff_regions, 
+                         gene_length_percentiles = c(0.05, 0.95),
+                         reciprocal_overlap_threshold = 0.8) {
+  #' Annotate structural variants based on breakpoint disruptions and gene transfers
+  #' 
+  #' @param comp_tib Tibble with SV data (must have start, end, width, variant columns)
+  #' @param gff_regions GFF tibble with gene annotations
+  #' @param gene_length_percentiles Vector of two values for gene length bounds (default: 5th-95th percentile)
+  #' @param reciprocal_overlap_threshold Minimum overlap fraction to call gene transfer (default: 0.8)
+  #' 
+  #' @return Annotated tibble with breakpoint disruptions and gene annotations
+  
+  require(IRanges)
+  require(tidyverse)
+  
+  # --- Step 1: Define gene-length thresholds ---
+  gene_lengths <- gff_regions$width
+  gene_length_bounds <- quantile(gene_lengths, probs = gene_length_percentiles)
+  
+  cat("Gene length distribution:\n")
+  cat(sprintf("  5th percentile: %s bp\n", gene_length_bounds[1]))
+  cat(sprintf("  95th percentile: %s bp\n", gene_length_bounds[2]))
+  cat(sprintf("  Median gene length: %d bp\n", median(gene_lengths)))
+  cat(sprintf("  Mean gene length: %d bp\n", round(mean(gene_lengths))))
+  
+  # --- Step 2: Create gene ranges ---
+  gff_ranges <- IRanges(start = gff_regions$start, end = gff_regions$end)
+  
+  # For genic vs intergenic classification (assuming coding and RNA are defined elsewhere)
+  # If not available, use all annotated features as genic
+  if (exists("coding") && exists("RNA")) {
+    genic_regions <- reduce(c(coding, RNA))
+  } else {
+    # Fallback: use all GFF features as genic regions
+    genic_regions <- reduce(gff_ranges)
+    cat("\nNote: Using all GFF features for genic/intergenic classification\n")
+  }
+  
+  # --- Step 3: Classify SV sizes ---
+  comp_tib_annotated <- comp_tib %>%
+    mutate(
+      size_category = case_when(
+        width < 100 ~ "very_small",
+        width < gene_length_bounds[1] ~ "small",
+        width >= gene_length_bounds[1] & width <= gene_length_bounds[2] ~ "gene_length",
+        width > gene_length_bounds[2] & width <= 10000 ~ "large",
+        width > 10000 ~ "very_large",
+        TRUE ~ "unclassified"
+      ),
+      is_gene_length = width >= gene_length_bounds[1] & width <= gene_length_bounds[2]
+    )
+  
+  # --- Step 4: Find genes disrupted by breakpoints ---
+  # A gene is disrupted if a breakpoint falls within it
+  
+  # Create ranges for each breakpoint (as small windows to catch edge cases)
+  breakpoint_window <- 5  # small window around breakpoint
+  sv_start_ranges <- IRanges(start = pmax(1, comp_tib$start - breakpoint_window), 
+                              end = comp_tib$start + breakpoint_window)
+  sv_end_ranges <- IRanges(start = pmax(1, comp_tib$end - breakpoint_window), 
+                            end = comp_tib$end + breakpoint_window)
+  
+  # Find genes hit by start breakpoints
+  start_hits <- findOverlaps(sv_start_ranges, gff_ranges)
+  start_disrupted <- data.frame(
+    sv_idx = queryHits(start_hits),
+    gene_idx = subjectHits(start_hits),
+    breakpoint = "start"
+  ) %>%
+    mutate(
+      gene = gff_regions$gene[gene_idx],
+      product = gff_regions$product[gene_idx],
+      gene_start = gff_regions$start[gene_idx],
+      gene_end = gff_regions$end[gene_idx]
+    )
+  
+  # Find genes hit by end breakpoints
+  end_hits <- findOverlaps(sv_end_ranges, gff_ranges)
+  end_disrupted <- data.frame(
+    sv_idx = queryHits(end_hits),
+    gene_idx = subjectHits(end_hits),
+    breakpoint = "end"
+  ) %>%
+    mutate(
+      gene = gff_regions$gene[gene_idx],
+      product = gff_regions$product[gene_idx],
+      gene_start = gff_regions$start[gene_idx],
+      gene_end = gff_regions$end[gene_idx]
+    )
+  
+  # Combine all disrupted genes
+  all_disrupted <- bind_rows(start_disrupted, end_disrupted) %>%
+    group_by(sv_idx) %>%
+    summarise(
+      n_genes_disrupted = n_distinct(gene_idx),
+      disrupted_genes = paste(unique(na.omit(gene)), collapse = "; "),
+      disrupted_products = paste(unique(na.omit(product)), collapse = "; "),
+      breakpoints_in_genes = paste(unique(breakpoint), collapse = ","),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      disrupted_genes = ifelse(disrupted_genes == "", "none", disrupted_genes),
+      disrupted_products = ifelse(disrupted_products == "", "none", substr(disrupted_products, 1, 100))
+    )
+  
+  # --- Step 5: Check for potential gene transfers (gene-length SVs only) ---
+  sv_ranges <- IRanges(start = comp_tib$start, end = comp_tib$end)
+  
+  # Only check reciprocal overlap for gene-length SVs
+  gene_length_indices <- which(comp_tib_annotated$is_gene_length)
+  
+  if (length(gene_length_indices) > 0) {
+    overlaps <- findOverlaps(sv_ranges[gene_length_indices], gff_ranges)
+    
+    gene_overlap_stats <- data.frame(
+      sv_idx = gene_length_indices[queryHits(overlaps)],
+      gene_idx = subjectHits(overlaps)
+    ) %>%
+      mutate(
+        sv_width = width(sv_ranges[sv_idx]),
+        gene_width = gff_regions$width[gene_idx],
+        overlap_width = width(pintersect(sv_ranges[sv_idx], gff_ranges[gene_idx])),
+        reciprocal_overlap = overlap_width / pmin(sv_width, gene_width)
+      )
+    
+    # Find best gene match for gene-length SVs
+    best_gene_match <- gene_overlap_stats %>%
+      group_by(sv_idx) %>%
+      slice_max(reciprocal_overlap, n = 1) %>%
+      ungroup() %>%
+      filter(reciprocal_overlap >= reciprocal_overlap_threshold) %>%
+      mutate(
+        transfer_gene = gff_regions$gene[gene_idx],
+        transfer_product = gff_regions$product[gene_idx]
+      ) %>%
+      select(sv_idx, reciprocal_overlap, transfer_gene, transfer_product)
+  } else {
+    best_gene_match <- data.frame(
+      sv_idx = integer(),
+      reciprocal_overlap = numeric(),
+      transfer_gene = character(),
+      transfer_product = character()
+    )
+  }
+  
+  # --- Step 6: Classify breakpoint locations (genic vs intergenic) ---
+  sv_starts <- IRanges(start = comp_tib$start, width = 1)
+  sv_ends <- IRanges(start = comp_tib$end, width = 1)
+  
+  start_in_gene <- overlapsAny(sv_starts, genic_regions)
+  end_in_gene <- overlapsAny(sv_ends, genic_regions)
+  
+  # --- Step 7: Combine all annotations ---
+  comp_tib_annotated <- comp_tib_annotated %>%
+    mutate(sv_idx = row_number()) %>%
+    # Add disrupted gene information
+    left_join(all_disrupted, by = "sv_idx") %>%
+    # Add gene transfer information
+    left_join(best_gene_match, by = "sv_idx") %>%
+    # Add breakpoint classifications
+    mutate(
+      start_in_gene = start_in_gene,
+      end_in_gene = end_in_gene,
+      breakpoint_class = case_when(
+        start_in_gene & end_in_gene ~ "both_genic",
+        start_in_gene | end_in_gene ~ "one_genic",
+        !start_in_gene & !end_in_gene ~ "both_intergenic",
+        TRUE ~ "unknown"
+      ),
+      # Clean up NAs
+      n_genes_disrupted = replace_na(n_genes_disrupted, 0),
+      reciprocal_overlap = replace_na(reciprocal_overlap, 0),
+      is_gene_transfer = is_gene_length & reciprocal_overlap >= reciprocal_overlap_threshold,
+      # Final annotation
+      sv_annotation = case_when(
+        is_gene_transfer ~ paste0("gene_transfer:", transfer_gene),
+        n_genes_disrupted > 1 ~ "multi_gene_disruption",
+        n_genes_disrupted == 1 ~ "single_gene_disruption",
+        is_gene_length & breakpoint_class == "both_intergenic" ~ "gene_length_intergenic",
+        breakpoint_class == "both_intergenic" & size_category == "very_small" ~ "small_intergenic_indel",
+        breakpoint_class == "both_intergenic" ~ "intergenic_sv",
+        TRUE ~ "unclassified"
+      )
+    ) %>%
+    select(-sv_idx)
+  
+  # --- Step 8: Summary statistics ---
+  cat("\n=== SV Classification Summary ===\n")
+  cat("\nSize categories:\n")
+  print(table(comp_tib_annotated$size_category))
+  
+  cat("\nBreakpoint classifications:\n")
+  print(table(comp_tib_annotated$breakpoint_class))
+  
+  cat("\nGene disruptions:\n")
+  cat(sprintf("  SVs disrupting genes: %d\n", sum(comp_tib_annotated$n_genes_disrupted > 0)))
+  cat(sprintf("  Total genes disrupted: %d\n", sum(comp_tib_annotated$n_genes_disrupted)))
+  
+  cat("\nGene-length SVs:", sum(comp_tib_annotated$is_gene_length), "\n")
+  cat("Likely gene transfers:", sum(comp_tib_annotated$is_gene_transfer), "\n")
+  
+  # --- Step 9: Show examples of disrupted genes ---
+  if (sum(comp_tib_annotated$n_genes_disrupted > 0) > 0) {
+    cat("\n=== Examples of Disrupted Genes ===\n")
+    examples <- comp_tib_annotated %>%
+      filter(n_genes_disrupted > 0) %>%
+      select(variant, width, disrupted_genes, disrupted_products) %>%
+      head(5)
+    print(examples)
+  }
+  
+  # --- Step 10: Variant type specific summary ---
+  cat("\n=== Breakpoints by Variant Type ===\n")
+  variant_summary <- comp_tib_annotated %>%
+    group_by(variant) %>%
+    summarise(
+      total = n(),
+      disrupting_genes = sum(n_genes_disrupted > 0),
+      both_intergenic = sum(breakpoint_class == "both_intergenic"),
+      gene_transfers = sum(is_gene_transfer),
+      .groups = 'drop'
+    )
+  print(as.data.frame(variant_summary))
+  
+  return(comp_tib_annotated)
+}
+
+# Simplified summary function
+create_sv_summary <- function(annotated_svs) {
+  #' Create a clean summary table of SVs with their annotations
+  #' 
+  #' @param annotated_svs Output from annotate_SVs function
+  #' @return Simplified tibble
+  
+  summary_table <- annotated_svs %>%
+    select(
+      start,
+      end, 
+      width,
+      variant,
+      size_category,
+      breakpoint_class,
+      n_genes_disrupted,
+      gene_annotation = case_when(
+        is_gene_transfer ~ paste0(transfer_gene, " [transfer]"),
+        n_genes_disrupted > 0 ~ disrupted_genes,
+        TRUE ~ "intergenic"
+      ),
+      product_annotation = case_when(
+        is_gene_transfer ~ transfer_product,
+        n_genes_disrupted > 0 ~ disrupted_products,
+        TRUE ~ "-"
+      )
+    ) %>%
+    mutate(
+      # Truncate long annotations
+      gene_annotation = substr(gene_annotation, 1, 50),
+      product_annotation = substr(product_annotation, 1, 80)
+    )
+  
+  return(summary_table)
+}
+
+# Function to get detailed breakpoint information
+get_breakpoint_details <- function(sv_indices, comp_tib, gff_regions) {
+  #' Get detailed information about which genes have breakpoints
+  #' 
+  #' @param sv_indices Indices of SVs to examine
+  #' @param comp_tib Original SV tibble
+  #' @param gff_regions GFF annotations
+  #' @return Detailed breakpoint information
+  
+  require(IRanges)
+  
+  results <- list()
+  gff_ranges <- IRanges(start = gff_regions$start, end = gff_regions$end)
+  
+  for (i in sv_indices) {
+    sv <- comp_tib[i, ]
+    
+    # Check start breakpoint
+    start_hits <- findOverlaps(
+      IRanges(start = sv$start, width = 1),
+      gff_ranges
+    )
+    
+    # Check end breakpoint  
+    end_hits <- findOverlaps(
+      IRanges(start = sv$end, width = 1),
+      gff_ranges
+    )
+    
+    start_genes <- if(length(start_hits) > 0) {
+      gff_regions[subjectHits(start_hits), ] %>%
+        select(gene, product, start, end)
+    } else {
+      data.frame(gene = "intergenic", product = NA, start = NA, end = NA)
+    }
+    
+    end_genes <- if(length(end_hits) > 0) {
+      gff_regions[subjectHits(end_hits), ] %>%
+        select(gene, product, start, end)
+    } else {
+      data.frame(gene = "intergenic", product = NA, start = NA, end = NA)
+    }
+    
+    results[[i]] <- list(
+      sv_info = sv,
+      start_breakpoint = start_genes,
+      end_breakpoint = end_genes
+    )
+  }
+  
+  return(results)
+}
+
+# Example usage:
+# annotated_svs <- annotate_SVs(comp_tib_i, gff_regions)
+# 
+# # Get simplified summary
+# summary <- create_sv_summary(annotated_svs)
+#
+# # Look at gene disruptions
+# annotated_svs %>% 
+#   filter(n_genes_disrupted > 0) %>%
+#   select(variant, width, disrupted_genes, disrupted_products) %>%
+#   View()
+#
+# # Get detailed breakpoint info for specific SVs
+# details <- get_breakpoint_details(c(1,2,3), comp_tib_i, gff_regions)
+
+# Simplified summary function
+create_sv_summary <- function(annotated_svs) {
+  #' Create a clean summary table of SVs with their annotations
+  #' 
+  #' @param annotated_svs Output from annotate_SVs function
+  #' @return Simplified tibble
+  
+  summary_table <- annotated_svs %>%
+    select(
+      start,
+      end, 
+      width,
+      variant,
+      size_category,
+      breakpoint_class,
+      n_genes_disrupted,
+      gene_annotation = case_when(
+        is_gene_transfer ~ paste0(transfer_gene, " [transfer]"),
+        n_genes_disrupted > 0 ~ disrupted_genes,
+        TRUE ~ "intergenic"
+      ),
+      product_annotation = case_when(
+        is_gene_transfer ~ transfer_product,
+        n_genes_disrupted > 0 ~ disrupted_products,
+        TRUE ~ "-"
+      )
+    ) %>%
+    mutate(
+      # Truncate long annotations
+      gene_annotation = substr(gene_annotation, 1, 50),
+      product_annotation = substr(product_annotation, 1, 80)
+    )
+  
+  return(summary_table)
+}
+
+# Function to get detailed breakpoint information
+get_breakpoint_details <- function(sv_indices, comp_tib, gff_regions) {
+  #' Get detailed information about which genes have breakpoints
+  #' 
+  #' @param sv_indices Indices of SVs to examine
+  #' @param comp_tib Original SV tibble
+  #' @param gff_regions GFF annotations
+  #' @return Detailed breakpoint information
+  
+  require(IRanges)
+  
+  results <- list()
+  gff_ranges <- IRanges(start = gff_regions$start, end = gff_regions$end)
+  
+  for (i in sv_indices) {
+    sv <- comp_tib[i, ]
+    
+    # Check start breakpoint
+    start_hits <- findOverlaps(
+      IRanges(start = sv$start, width = 1),
+      gff_ranges
+    )
+    
+    # Check end breakpoint  
+    end_hits <- findOverlaps(
+      IRanges(start = sv$end, width = 1),
+      gff_ranges
+    )
+    
+    start_genes <- if(length(start_hits) > 0) {
+      gff_regions[subjectHits(start_hits), ] %>%
+        select(gene, product, start, end)
+    } else {
+      data.frame(gene = "intergenic", product = NA, start = NA, end = NA)
+    }
+    
+    end_genes <- if(length(end_hits) > 0) {
+      gff_regions[subjectHits(end_hits), ] %>%
+        select(gene, product, start, end)
+    } else {
+      data.frame(gene = "intergenic", product = NA, start = NA, end = NA)
+    }
+    
+    results[[i]] <- list(
+      sv_info = sv,
+      start_breakpoint = start_genes,
+      end_breakpoint = end_genes
+    )
+  }
+  
+  return(results)
+}
+
+# Example usage:
+# annotated_svs <- annotate_SVs(comp_tib_i, gff_regions)
+# 
+# # Get simplified summary
+# summary <- create_sv_summary(annotated_svs)
+#
+# # Look at gene disruptions
+# annotated_svs %>% 
+#   filter(n_genes_disrupted > 0) %>%
+#   select(variant, width, disrupted_genes, disrupted_products) %>%
+#   View()
+#
+# # Get detailed breakpoint info for specific SVs
+# details <- get_breakpoint_details(c(1,2,3), comp_tib_i, gff_regions)
+
+# Helper function to get gene information for specific SVs
+get_affected_genes <- function(sv_indices, comp_tib, coding_ranges, gff_regions) {
+  #' Get detailed information about genes affected by specific SVs
+  #' 
+  #' @param sv_indices Row indices of SVs to examine
+  #' @param comp_tib The SV tibble
+  #' @param coding_ranges IRanges object with coding sequences
+  #' @param gff_regions The GFF tibble with gene annotations
+  #' 
+  #' @return Tibble with detailed gene overlap information
+  
+  sv_subset <- comp_tib[sv_indices, ]
+  sv_ranges <- IRanges(start = sv_subset$start, end = sv_subset$end)
+  
+  overlaps <- findOverlaps(sv_ranges, coding_ranges)
+  
+  affected_genes <- data.frame(
+    sv_idx = sv_indices[queryHits(overlaps)],
+    gene_idx = subjectHits(overlaps)
+  ) %>%
+    mutate(
+      sv_start = sv_subset$start[queryHits(overlaps)],
+      sv_end = sv_subset$end[queryHits(overlaps)],
+      sv_width = sv_subset$width[queryHits(overlaps)],
+      sv_variant = sv_subset$variant[queryHits(overlaps)],
+      gene_start = start(coding_ranges)[gene_idx],
+      gene_end = end(coding_ranges)[gene_idx],
+      gene_width = width(coding_ranges)[gene_idx],
+      overlap_width = width(pintersect(sv_ranges[queryHits(overlaps)], 
+                                       coding_ranges[gene_idx])),
+      fraction_gene_affected = overlap_width / gene_width
+    ) %>%
+    left_join(
+      gff_regions %>% 
+        filter(type == "CDS") %>%
+        mutate(gene_idx = row_number()) %>%
+        select(gene_idx, gene, product),
+      by = "gene_idx"
+    ) %>%
+    arrange(sv_idx, gene_start)
+  
+  return(affected_genes)
+}
+
+
+annotated_svs <-
+  annotate_SVs(comp_tib_i, coding, RNA,
+                              gene_length_percentiles = c(0.05, 0.95),
+                              reciprocal_overlap_threshold = 0.8)
+#
+# # Get gene-length SVs that are likely gene transfers
+gene_transfers <- annotated_svs %>%
+  filter(is_gene_transfer)
+#
+# # Get SVs with both breakpoints in intergenic regions
+intergenic_svs <- annotated_svs %>%
+  filter(breakpoint_class == "both_intergenic")
+#
+# # Examine specific genes affected by gene-disrupting SVs
+disrupting_svs <- annotated_svs %>%
+  filter(sv_annotation %in% c("single_gene_disruption", "multi_gene_disruption"))
+affected <- get_affected_genes(which(annotated_svs$sv_annotation == "single_gene_disruption")[1:5],
+                               comp_tib_i, coding, gff_regions)
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+gene_lengths <- width(coding)
+quantile(gene_lengths, probs = c(0.025, 0.05, 0.25, 0.5, 0.75, 0.90, 0.95, 0.975))
+
+
+coding_range <- 
+  c(min(width(coding)), max(width(coding)))
+
+
+c(min(width(coding)), max(width(coding)))
+
+
+res_ava %>% filter(species=="Mycobacterium_tuberculosis") %>% group_by(rid) %>% summarise(length(unique(qid)))
+
+width(coding) %>% summary
+all_prokka_tbl %>% count(type)
+gff_regions %>% count(type)
+
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(GenomicRanges)
+  library(IRanges)
+  library(rtracklayer)
+  library(Biostrings)
+  library(stringr)
+})
+
+
+# Classify SVs for one accession (RID side) with rules + labels
+classify_svs_one <- function(sv_tbl, accession, tracks,
+                             sv_type_col = c("variant","variant_specific"),
+                             span_min_bp = 50L, span_min_frac = 0.20,
+                             driver_boundary_bp = 25L,
+                             known_driver_lengths_bp = c(1350, 1360, 1365, 1569, 259),
+                             length_tol_frac = 0.10, length_tol_min = 50L){
+
+  sv_type_col <- sv_type_col[sv_type_col %in% names(sv_tbl)][1]
+  stopifnot(!is.na(sv_type_col))
+
+  # Use only rows where coordinates are with respect to this accession (RID)
+  df <- sv_tbl %>%
+    filter(rid == accession, is.finite(start), is.finite(end), width > 0) %>%
+    transmute(sv_id = row_number(),
+              sv_type = .data[[sv_type_col]],
+              start   = as.integer(pmin(start, end)),
+              end     = as.integer(pmax(start, end)),
+              length  = as.integer(width))
+
+  if (!nrow(df)) return(df %>% mutate(category = NA_character_))
+
+  # Breakpoints and span
+  gr_bpL <- GRanges(accession, IRanges(df$start, df$start))
+  gr_bpR <- GRanges(accession, IRanges(df$end,   df$end))
+  gr_span<- GRanges(accession, IRanges(df$start, df$end))
+
+  # Regions for each breakpoint
+  hit <- function(q, gr) if (length(gr)) as.logical(countOverlaps(q, gr) > 0) else rep(FALSE, length(q))
+  bpL_in_cds  <- hit(gr_bpL, tracks$cds)
+  bpR_in_cds  <- hit(gr_bpR, tracks$cds)
+  span_in_cds <- width(pintersect(gr_span, reduce(tracks$cds)))
+  # consider "disrupting" if breakpoint is inside CDS OR span overlaps CDS by >= span_min_bp
+  gene_disrupt_flag <- (bpL_in_cds | bpR_in_cds) | (span_in_cds >= span_min_bp)
+
+  # Driver boundary rule
+  bpL_near_drv <- hit(gr_bpL, tracks$drv_bnd)
+  bpR_near_drv <- hit(gr_bpR, tracks$drv_bnd)
+  rule_boundary <- bpL_near_drv | bpR_near_drv
+
+  # Two-copy rule: same driver token near both breakpoints
+  token_near <- function(gr_bp){
+    if (!nrow(tracks$driver_table)) return(rep(NA_character_, length(gr_bp)))
+    # build boundary windows for each driver row
+    drv_bnd_tbl <- tracks$driver_table %>%
+      mutate(begL = pmax(start - driver_boundary_bp, 1L),
+             endL = start + driver_boundary_bp,
+             begR = pmax(end   - driver_boundary_bp, 1L),
+             endR = end   + driver_boundary_bp)
+    # GRanges of all boundary windows with tokens
+    gr_tok <- bind_rows(
+      drv_bnd_tbl %>% transmute(seqid, beg = begL, end = endL, tokens),
+      drv_bnd_tbl %>% transmute(seqid, beg = begR, end = endR, tokens)
+    )
+    if (!nrow(gr_tok)) return(rep(NA_character_, length(gr_bp)))
+    gr_tokR <- GRanges(gr_tok$seqid, IRanges(gr_tok$beg, gr_tok$end))
+    ov <- findOverlaps(gr_bp, gr_tokR)
+    out <- rep(NA_character_, length(gr_bp))
+    if (length(ov)) {
+      # concatenate unique tokens per breakpoint
+      jj <- split(gr_tok$tokens[subjectHits(ov)], queryHits(ov))
+      for (k in names(jj)) out[as.integer(k)] <- paste(unique(na.omit(jj[[k]])), collapse=";")
+    }
+    out
+  }
+  tokL <- token_near(gr_bpL)
+  tokR <- token_near(gr_bpR)
+  same_token <- !is.na(tokL) & !is.na(tokR) & tokL == tokR
+  rule_two_copy <- same_token
+
+  # Length-match rule (to known driver lengths)
+  near_len <- function(L, canon, tol_frac, tol_min){
+    any(abs(L - canon) <= pmax(tol_frac * canon, tol_min))
+  }
+  rule_length <- vapply(df$length, near_len, logical(1),
+                        canon = known_driver_lengths_bp,
+                        tol_frac = length_tol_frac, tol_min = length_tol_min)
+
+  # Primary category
+  category <- case_when(
+    rule_boundary | rule_two_copy | rule_length ~ "gene-caused",
+    gene_disrupt_flag                           ~ "gene-disrupting",
+    TRUE                                        ~ "unannotated-intergenic"
+  )
+
+  # Driver label (for gene-caused): prefer matching tokens; fall back to generic driver class
+  driver_label <- ifelse(
+    category != "gene-caused", NA_character_,
+    dplyr::coalesce(
+      ifelse(same_token, tokL, NA_character_),
+      ifelse(!is.na(tokL) | !is.na(tokR),
+             paste(na.omit(c(tokL, tokR)), collapse = " + "),
+             NA_character_)
+    )
+  )
+  driver_rule <- ifelse(category != "gene-caused", NA_character_,
+                        paste(c(ifelse(rule_length,  "length",  NA),
+                                ifelse(rule_boundary,"boundary",NA),
+                                ifelse(rule_two_copy,"two_copy", NA)) |> na.omit(),
+                              collapse = "+"))
+
+  tibble(
+    accession = accession,
+    sv_id = df$sv_id,
+    sv_type = df$sv_type,
+    start = df$start, end = df$end, length = df$length,
+    bpL_in_cds, bpR_in_cds, span_cds_bp = as.integer(span_in_cds),
+    rule_length, rule_boundary, rule_two_copy,
+    category,
+    driver_label, driver_rule
+  )
+}
+
+# Enrichment tests (binomial) for gene-disrupting vs CDS, and unannotated-intergenic vs intergenic-safe
+enrichment_from_categories <- function(sv_ann, tracks){
+  # baselines from tracks
+  genome_bp <- sum(width(tracks$genome))
+  cds_bp    <- sum(width(tracks$cds))
+  inter_safe_bp <- sum(width(tracks$intergenic_safe))
+  p_cds     <- cds_bp / genome_bp
+  p_inter_s <- inter_safe_bp / genome_bp
+
+  # ---- gene-disrupting test: use breakpoints from SVs that are NOT gene-caused
+  df1 <- sv_ann %>% filter(category != "gene-caused")
+  n_bp1 <- nrow(df1) * 2L
+  obs_cds_bp <- sum(df1$bpL_in_cds) + sum(df1$bpR_in_cds)
+  test1 <- if (n_bp1 > 0) binom.test(obs_cds_bp, n_bp1, p_cds) else NULL
+  enr1 <- tibble(
+    test = "gene-disrupting vs CDS",
+    n_SVs_in_scope = nrow(df1),
+    n_BPs_in_scope = n_bp1,
+    baseline = p_cds,
+    observed = obs_cds_bp / n_bp1,
+    log2_enrichment = if (n_bp1>0) log2((obs_cds_bp / n_bp1) / p_cds) else NA_real_,
+    p_value = if (!is.null(test1)) test1$p.value else NA_real_,
+    ci_low  = if (!is.null(test1)) test1$conf.int[1] else NA_real_,
+    ci_high = if (!is.null(test1)) test1$conf.int[2] else NA_real_
+  )
+
+  # ---- unannotated-intergenic test: breakpoints from SVs labeled unannotated-intergenic
+  df2 <- sv_ann %>% filter(category == "unannotated-intergenic")
+  n_bp2 <- nrow(df2) * 2L
+  # count breakpoints that actually fall inside intergenic_safe
+  in_inter_safe_L <- if (nrow(df2)) as.logical(countOverlaps(GRanges(df2$accession, IRanges(df2$start, df2$start)),
+                                                            tracks$intergenic_safe)) else logical(0)
+  in_inter_safe_R <- if (nrow(df2)) as.logical(countOverlaps(GRanges(df2$accession, IRanges(df2$end, df2$end)),
+                                                            tracks$intergenic_safe)) else logical(0)
+  obs_inter_bp <- sum(in_inter_safe_L) + sum(in_inter_safe_R)
+  test2 <- if (n_bp2 > 0) binom.test(obs_inter_bp, n_bp2, p_inter_s) else NULL
+  enr2 <- tibble(
+    test = "unannotated-intergenic vs intergenic-safe",
+    n_SVs_in_scope = nrow(df2),
+    n_BPs_in_scope = n_bp2,
+    baseline = p_inter_s,
+    observed = if (n_bp2>0) obs_inter_bp / n_bp2 else NA_real_,
+    log2_enrichment = if (n_bp2>0) log2((obs_inter_bp / n_bp2) / p_inter_s) else NA_real_,
+    p_value = if (!is.null(test2)) test2$p.value else NA_real_,
+    ci_low  = if (!is.null(test2)) test2$conf.int[1] else NA_real_,
+    ci_high = if (!is.null(test2)) test2$conf.int[2] else NA_real_
+  )
+
+  # simple counts & proportions
+  counts <- sv_ann %>%
+    count(category) %>%
+    mutate(prop = n / sum(n)) %>%
+    arrange(desc(prop))
+
+  # driver breakdown for gene-caused
+  drivers <- sv_ann %>%
+    filter(category == "gene-caused") %>%
+    mutate(driver_class = case_when(
+      !is.na(driver_label) & grepl("^IS:", driver_label) ~ "IS",
+      !is.na(driver_label) & grepl("^Tn:", driver_label) ~ "Tn",
+      !is.na(driver_label) & grepl("Phage", driver_label) ~ "Phage/Integrase",
+      !is.na(driver_label) & grepl("TnpB", driver_label) ~ "TnpB",
+      !is.na(driver_label) & grepl("TnpA/Y1", driver_label) ~ "TnpA/Y1",
+      !is.na(driver_label) & grepl("Transposase", driver_label) ~ "Transposase",
+      TRUE ~ "Driver-unknown"
+    )) %>%
+    count(driver_class, driver_label, driver_rule, sort = TRUE)
+
+  list(counts = counts, enrichment = bind_rows(enr1, enr2), drivers = drivers)
+}
+
+#---------------------------#
+# Usage on your "first accession"
+#---------------------------#
+
+# Your pre-existing objects:
+# acc_root, ss_accs, res_ava, gff_index  (and the synced FASTA .txt files in acc_root)
+
+acc_i <- ss_accs[1]
+synced_file_i <- list.files(acc_root, pattern = sprintf("\\%s.txt$", acc_i),
+                            recursive = TRUE, full.names = TRUE)[1]
+gff_path_i <- gff_index %>% filter(accession == acc_i) %>% pull(gff_path) %>% .[1]
+
+# Build tracks (uses FASTA length if available)
+tracks_i <- build_tracks_one(gff_path_i, fasta_path = synced_file_i)
+
+# SVs touching this accession (RID or QID), then classify on RID side only
+comp_tib_i <- res_ava %>% filter(rid == acc_i | qid == acc_i)
+sv_ann_i <- classify_svs_one(comp_tib_i, accession = acc_i, tracks = tracks_i,
+                             sv_type_col = c("variant","variant_specific"),
+                             # tweak thresholds here if you like:
+                             span_min_bp = 50L, span_min_frac = 0.20,
+                             driver_boundary_bp = 25L,
+                             known_driver_lengths_bp = c(1350, 1360, 1365, 1569, 259),
+                             length_tol_frac = 0.10, length_tol_min = 50L)
+
+# 1) Counts & proportions
+sv_counts_i <- sv_ann_i %>% count(category) %>% mutate(prop = n / sum(n))
+sv_counts_i
+
+# 2) Enrichment tests
+sv_enrich_i <- enrichment_from_categories(sv_ann_i, tracks_i)
+sv_enrich_i$counts
+sv_enrich_i$enrichment
+sv_enrich_i$drivers
+
+
+# Peek
+print(gff_index, n = 20)
+
+
+
+gff_index$gff_path %>% readLines()
+
+
+read.delim(gff_index$gff_path[1])
+
+
+
+
+readLines(gff_index$gff_path[1]) %>% head(30)
+
+
+
+
+gff <- read_prokka_gff2(gff_index$gff_path[1])
+feat <- gff$features
+cds  <- gff$cds
+
+# 1) What feature types are present?
+feat %>% count(type)
+
+# 2) How many CDS parts per locus_tag in the raw features?
+feat %>%
+  filter(type == "CDS") %>%
+  count(locus_tag, name = "n_parts") %>%
+  arrange(desc(n_parts)) %>% head(10)
+
+# 3) Multi-part genes (should match cds$n_parts > 1)
+cds %>% filter(n_parts > 1) %>% select(seqid, locus_tag, n_parts) %>% head()
+
+# 4) Pick one multi-part gene and compare raw pieces vs collapsed row
+lt <- cds %>% filter(n_parts > 1) %>% dplyr::slice(1) %>% pull(locus_tag)
+feat %>% filter(type == "CDS", locus_tag == lt) %>% arrange(start, end)
+cds  %>% filter(locus_tag == lt)
+
+# 5) Sanity check: recompute cds from features and compare
+chk <- feat %>%
+  filter(type == "CDS") %>%
+  group_by(seqid, locus_tag) %>%
+  summarise(
+    start   = min(start, na.rm = TRUE),
+    end     = max(end,   na.rm = TRUE),
+    strand  = dplyr::first(na.omit(strand)),
+    n_parts = dplyr::n(),
+    gene    = dplyr::first(na.omit(gene)),
+    product = dplyr::first(na.omit(product)),
+    .groups = "drop"
+  ) %>%
+  mutate(length = end - start + 1L)
+
+# Do the key columns match?
+all.equal(
+  dplyr::arrange(select(cds, seqid, locus_tag, start, end, strand, n_parts, gene, product, length), locus_tag),
+  dplyr::arrange(select(chk, seqid, locus_tag, start, end, strand, n_parts, gene, product, length), locus_tag)
+)
+
+# 6) Features that are *not* CDS (tRNAs/rRNAs etc.)
+feat %>% filter(type != "CDS") %>% count(type)
+
+
+
+###
+
+res_ava_mt <- 
+  res_ava %>% 
+  filter(species=="Mycobacterium_tuberculosis")
+
+
+unique(res_ava$species)
+
+res_ava_sa <- 
+  res_ava %>% 
+  filter(species=="Salmonella_enterica")
+
+
+
+res_ava_bp <- 
+  res_ava %>% 
+  filter(species=="Bordetella_pertussis")
+
+res_ava %>% filter(variant=="Structural rearrangement")
+
+BiocManager::install("rtracklayer")
+
+```
+
+
+
+
+```{r}
+assign_reciprocal_overlap_groups <- 
+  function(
+    sv_table, overlap_thresh = 0.8, 
+    start_col = "start", end_col = "end"
+    ) {
+    # Extract ranges
+    sv_ranges <- IRanges(start = sv_table[[start_col]], end = sv_table[[end_col]])
+  
+    # Find overlaps
+    hits <- findOverlaps(sv_ranges, sv_ranges, type = "any")
+    
+    # Reciprocal overlap function
+    reciprocal_overlap <- function(i, j) {
+      ov_start <- max(sv_table[[start_col]][i], sv_table[[start_col]][j])
+      ov_end   <- min(sv_table[[end_col]][i],   sv_table[[end_col]][j])
+      ov_len   <- max(0, ov_end - ov_start + 1)
+      len_i    <- sv_table[[end_col]][i] - sv_table[[start_col]][i] + 1
+      len_j    <- sv_table[[end_col]][j] - sv_table[[start_col]][j] + 1
+      c(ov_len / len_i, ov_len / len_j)
+    }
+    
+    # Build edges for the overlap graph
+    edges <- vector("list", 0)
+    for (k in seq_along(hits@from)) {
+      i <- hits@from[k]
+      j <- hits@to[k]
+      if (i < j) {
+        ro <- reciprocal_overlap(i, j)
+        if (all(ro >= overlap_thresh)) {
+          edges <- append(edges, list(c(i, j)))
+        }
+      }
+    }
+    
+    # Build graph
+    all_ids <- seq_len(nrow(sv_table))
+    g <- igraph::make_empty_graph(n = length(all_ids), directed = FALSE)
+    if (length(edges) > 0) {
+      g <- igraph::add_edges(g, unlist(edges))
+    }
+    
+    # Connected components: group assignment
+    g_membership <- components(g)$membership
+    sv_table$recurrence_group <- g_membership
+    
+    return(sv_table)
+    }
+```
+
+
+
+```{r}
+assign_gmm_submodes <- function(df) {
+  n <- nrow(df)
+  if(n < 10) return(rep(NA_character_, n))
+  gmm <- recursive_gmm(df$log_length)
+  # Handle empty or failed GMM fit gracefully
+  if(nrow(gmm) == 0 || !"mean_log10" %in% colnames(gmm)) return(rep(NA_character_, n))
+  map_chr(df$log_length, function(x) {
+    idx <- which.min(abs(x - gmm$mean_log10))
+    if(length(idx)==0) return(NA_character_)
+    gmm$submode[idx]
+  })
+}
+
+r1v <-
+  resolution_1va %>%
+  mutate(
+    merge_thresh = pmax(50, 0.01 * width),
+    fuzzy_start = start - merge_thresh,
+    fuzzy_end   = end + merge_thresh
+  ) %>%
+  filter(!is.na(start))
+
+r1v2 <- 
+  resolution_1va %>% 
+  filter(variant_specific !="none", !is.na(start)) %>%
+  mutate(log_width = log10(width)) %>%
+  distinct()
+
+all_kde <- assign_kde_peaks(disp_all) 
+
+all_kde_gmm <- 
+  all_kde%>%
+  group_by(mode_group) %>%
+  mutate(submode = assign_gmm_submodes(cur_data())) %>%
+  ungroup()
+
+all_kde <- assign_kde_peaks(disp_all)
+
+
+gmm_summary <- all_kde_gmm %>%
+  filter(!is.na(submode)) %>%
+  group_by(mode_group, submode) %>%
+  summarise(
+    count = n(),
+    median_length_bp = median(width),
+    mean_length_bp = mean(width),
+    sd_length_bp = sd(width),
+    iqr_length_bp = IQR(width),
+    tightness = sd(width) / mean(width),   
+    .groups = "drop"
+  ) %>%
+  arrange( mode_group, mean_length_bp)
+
+gmm_summary
+
+
+all_kde_gmm$SV_id <- seq_len(nrow(all_kde_gmm))
+
+
+
+## find 
+
+
+sv_ranges <- IRanges(start = r1v2$start, end = r1v2$end)
+# Get all overlaps
+hits <- findOverlaps(sv_ranges, sv_ranges, type = "any")
+
+reciprocal_overlap <- function(i, j) {
+  ov_start <- max(r1v2$start[i], r1v2$start[j])
+  ov_end   <- min(r1v2$end[i],   r1v2$end[j])
+  ov_len   <- max(0, ov_end - ov_start + 1)
+  len_i    <- r1v2$end[i] - r1v2$start[i] + 1
+  len_j    <- r1v2$end[j] - r1v2$start[j] + 1
+  c(ov_len / len_i, ov_len / len_j)
+}
+
+# Build a graph
+#library(igraph)
+edges <- vector("list", length = 0)
+for(k in seq_along(hits@from)) {
+  i <- hits@from[k]
+  j <- hits@to[k]
+  if(i < j) {  # Avoid double counting
+    ro <- reciprocal_overlap(i, j)
+    if(all(ro >= 0.8)) {
+      edges <- append(edges, list(c(i, j)))
+    }
+  }
+}
+
+all_ids <- seq_len(nrow(r1v2))
+g <- igraph::make_empty_graph(n = length(all_ids), directed = FALSE) %>%
+     igraph::add_edges(unlist(edges))
+
+V(g)$name <- as.character(all_ids)
+
+# Now get the membership for all SVs
+membership <- rep(NA_integer_, length(all_ids))
+g_membership <- components(g)$membership
+
+# Map graph membership to original SV indices
+membership[as.integer(V(g)$name)] <- g_membership
+
+# Now assign it back; singletons will be NA, so replace with unique group
+singleton_ids <- which(is.na(membership))
+membership[singleton_ids] <- max(g_membership) + seq_along(singleton_ids)
+
+membership <- components(g)$membership
+
+akg <- 
+  r1v2 %>%
+  mutate( 
+    recurrence_group = membership
+  )
+
+sorted_reoc<- 
+  akg %>% add_count(recurrence_group, sort = T) %>% as.data.frame() %>%
+  arrange(desc(n), desc(recurrence_group))
+
+
+sorted_reoc %>% filter(variant=="Structural rearrangement")
+
+
+plot_gmm_fit_for_mode <- function(df, mode_group_name, n_components = 3, bins = 50) {
+  sub <- df %>% filter(mode_group == mode_group_name)
+  log_lengths <- sub$log_length
+  
+  # Fit GMM
+  gmm <- Mclust(log_lengths, G = 1:n_components)
+  means <- gmm$parameters$mean
+  sds <- sqrt(gmm$parameters$variance$sigmasq)
+  props <- gmm$parameters$pro
+  
+  # Data for plotting densities
+  x_vals <- seq(min(log_lengths), max(log_lengths), length.out = 500)
+  
+  # Mixture density
+  mixture_density <- rowSums(sapply(1:length(means), function(i) {
+    props[i] * dnorm(x_vals, means[i], sds[i])
+  }))
+  
+  # Each component (for plotting)
+  component_densities <- sapply(1:length(means), function(i) {
+    props[i] * dnorm(x_vals, means[i], sds[i])
+  })
+  component_df <- data.frame(x = rep(x_vals, length(means)),
+                             y = as.vector(component_densities),
+                             component = rep(paste0("Comp_", 1:length(means)), each = length(x_vals)))
+  
+  # Plot
+  ggplot() +
+    geom_histogram(
+      data = sub, aes(x = log_length, y = after_stat(density)), 
+      bins = bins, fill = "grey85", color = "grey50", alpha = 0.6
+    ) +
+    geom_line(aes(x = x_vals, y = mixture_density), linewidth = 1.1, color = "blue") +
+    geom_line(
+      data = component_df, 
+      aes(x = x, y = y, color = component),
+      linewidth = 1, linetype = "dashed"
+    ) +
+    scale_color_brewer(palette = "Dark2") +
+    labs(
+      title = paste("GMM fit for", mode_group_name),
+      x = "log10(SV length)", y = "Density"
+    ) +
+    theme_minimal(base_size = 14)
+}
+
+# Example usage:
+plot_gmm_fit_for_mode(all_kde, "Peak_1", n_components = 3)
+
+ggplot(gmm_summary, aes(x = count, y = tightness, color = mode_group, label = submode)) +
+  geom_point(size = 3) +
+  geom_text(nudge_y = 0.02, size = 3, show.legend = FALSE) +
+  labs(
+    x = "Count (number of SVs in mode)",
+    y = "Tightness (SD/mean)",
+    color = "Mode group",
+    title = "Tightness vs. Count for Each Mode"
+  ) +
+  theme_minimal()
+
+
+library(ggplot2)
+
+ggplot(gmm_summary, aes(x = mean_length_bp, y = tightness, size = count, label = submode)) +
+  geom_point(alpha = 0.7, color = "#2a5599") +
+  geom_text(vjust = -0.8, size = 3) +
+  scale_x_log10() +
+  labs(
+    x = "Mean SV length (bp, log10)",
+    y = "Tightness (SD/mean)",
+    size = "Count",
+    title = "Tightness vs. Mean SV Length (Bubble size = count per mode)"
+  ) +
+  theme_minimal()
+
+
+
+
+ggplot(all_kde_gmm, aes(x = log10(width), fill = submode)) +
+  geom_histogram(binwidth = 0.1, color = "black", alpha=0.8) +
+  facet_wrap(~variant, scales = "free_y") +
+  labs(x = "log10(SV width)", y = "Count", fill = "GMM submode", 
+       title = "SV Length Distribution by Variant Type and GMM Submode")
+
+ggplot(all_kde_gmm, aes(x = log10(width), color = submode, fill = submode)) +
+  geom_density(alpha=0.3) +
+  facet_wrap(~variant, scales = "free_y") +
+  labs(x = "log10(SV width)", y = "Density", fill = "GMM submode", 
+       title = "SV Length Density by Variant Type and Submode")
+
+
+all_kde <-
+  all_kde %>%
+  mutate(submode = assign_gmm_submodes(.)) 
+  
+
+
+dup_kde %>%
+  dplyr::select(rid, qid, start, end, width, mode_group, mode_mean_bp, zone) %>%
+  arrange(mode_group, width) %>% as.data.frame()
+
+r1v
+ggplot(dup_kde, aes(x = log10(width), fill = mode_group)) +
+  geom_histogram(binwidth = 0.1, alpha = 0.7, color = "black") +
+  geom_vline(aes(xintercept = log10(mode_mean_bp)), 
+             data = dup_kde %>% distinct(mode_group, mode_mean_log, mode_mean_bp), 
+             linetype = "dashed", color = "red") +
+  labs(x = "log10(Duplication width)", y = "Count", fill = "Mode group",
+       title = "Dispersed Duplication Size Modes (KDE-based clusters)")
+
+sr1v_ranges <- IRanges(start = r1v$fuzzy_start, end = r1v$fuzzy_end)
+
+# Reduce merges overlapping/nearby SVs to create cluster intervals
+merged <- reduce(sr1v_ranges)
+
+# Map each SV to its merged group
+r1v_hits <- findOverlaps(IRanges(r1v$start, r1v$end), merged)
+
+r1v$sv_cluster <- NA_integer_
+
+length(unique(r1v$sv_cluster))
+
+
+r1v %>%
+  group_by(sv_cluster) %>%
+  summarise(n_SVs = n()) %>%
+  arrange(desc(n_SVs)) %>%
+  head(10)
+
+
+# The result from findOverlaps() is a Hits object:
+# - queryHits: index of SV (row in r1v)
+# - subjectHits: index of merged cluster interval
+
+hits <- findOverlaps(IRanges(r1v$start, r1v$end), merged)
+
+# Assign cluster ID where there is a hit
+r1v$sv_cluster[queryHits(hits)] <- subjectHits(hits)
+
+
+r1v %>%
+  count(sv_cluster) %>%
+  ggplot(aes(n)) +
+    geom_histogram(binwidth = 1) +
+    labs(x = "Number of SVs per cluster", y = "Count of clusters",
+         title = "Distribution of SV Recurrence (Cluster Size)")
+
+
+
+alignment_dir_ava
+
+alignment_directory <- 
+  alignment_dir_rvq
+
+get_all_SVs(alignment_dir_1va)
+
+
+get_all_SVs <- 
+  function(alignment_directory) {
+
+    all_delta_filt_files <- 
+      list.files(
+        alignment_directory,
+        full.names = TRUE, pattern = "filtered.delta"
+      )
+  
+    all_delta_unfilt_files <- 
+      list.files(
+        sprintf("%s/unfiltered", alignment_directory),
+        full.names = TRUE
+      )
+  
+    filt_basenames  <- basename(all_delta_filt_files)
+    filt_core_names <- sub("_filtered\\.delta$", "", filt_basenames)
+  
+    unfilt_basenames  <- basename(all_delta_unfilt_files)
+    unfilt_core_names <- sub("\\.delta$", "", unfilt_basenames)
+  
+    # Add this line:
+    unfilt_lookup <- setNames(all_delta_unfilt_files, unfilt_core_names)
+  
+    n <- length(all_delta_filt_files)
+    all_res <- vector("list", n)
+  
+    pb <- txtProgressBar(min = 1, max = n, style = 3)
+  
+    for (i in 1:n) {
+      core_name <- filt_core_names[i]
+      filtered_delta <- all_delta_filt_files[i]
+  
+      if (!core_name %in% names(unfilt_lookup)) {
+        warning(
+          sprintf(
+            "No unfiltered file found for %s, skipping...", 
+            filtered_delta
+            )
+          )
+        next
+      }
+      unfiltered_delta <- unfilt_lookup[[core_name]]
+      species_name <- "Salmonella_enterica" # change as needed
+  
+      all_res[[i]] <- 
+        delta_all_SVs(
+          delta_file = filtered_delta, 
+          unfiltered_delta_file = unfiltered_delta,
+          species_name = species_name
+        )
+  
+      setTxtProgressBar(pb, i)
+    }
+  
+    close(pb)
+  
+    return(bind_rows(Filter(Negate(is.null), all_res)))
+}
+
+
+
+deltas_ava
+
+delta_all_SVs
+
+
+method_summary <- 
+  map_dfr(names(res_list), function(meth) {
+  df <- res_list[[meth]]
+  tibble(
+    Method = meth,
+    Total_SVs = nrow(df),
+    Median_Width = median(df$width, na.rm=TRUE),
+    Mean_Width   = mean(df$width, na.rm=TRUE)
+  )
+})
+
+# SV types per method
+sv_type_summary <- map_dfr(names(res_list), function(meth) {
+  df <- res_list[[meth]]
+  df %>%
+    count(variant) %>%
+    mutate(Method = meth)
+})
+
+# Wide-format for SV type count
+sv_type_wide <- sv_type_summary %>%
+  tidyr::pivot_wider(names_from = variant, values_from = n, values_fill = 0)
+
+method_summary <- left_join(method_summary, sv_type_wide, by = "Method")
+library(kableExtra)
+(method_summary, digits=2, caption = "Summary of SV detection resolution by method")
+
+
+all_df <- bind_rows(
+  lapply(names(res_list), function(meth) {
+    df <- res_list[[meth]]
+    df$Method <- meth
+    df
+  })
+)
+ggplot(all_df, aes(x = Method, y = width, fill = Method)) +
+  geom_violin(alpha=0.6) +
+  scale_y_log10() +
+  theme_classic(base_size = 15) +
+  labs(title = "SV Size Distribution by Alignment Strategy",
+       y = "SV Length (bp, log scale)", x = "Method")
+
+
+all_df %>% group_by(species, Method, variant, variant_specific) %>%
+  summarise(
+    variant_count = n()
+  )
+
+
+```
+
+
+```{r}
+sync_dir
+
+
+list.dirs(
+"processing/sync"  
+)
+```
+
+
+## Genic enrichment
+```{r}
+
+annotate_fna2 <- 
+  function(species_name, sync_dir, prokka_dir, accessions){
+        sfs <- 
+            list.files(sync_dir, full.names = T) 
+        sfs <- 
+            sfs[
+            sub(".txt", "", basename(sfs)) %in% accessions
+            ]
+        
+        #accession#s
+        prokka_coms <- 
+            pbmclapply(
+                1:length(sfs), 
+                function(i){
+                    # prokka_check <- 
+                    #     sprintf(
+                    #         "if [ ! -e %s ]",
+                    #         filter_out
+                    #     )
+                    prokka_com <- 
+                        sprintf(
+                            "prokka --species '%s' --outdir %s --prefix %s %s %s",
+                            gsub("_", " ", species_name),
+                            prokka_dir, 
+                            gsub(".txt", "", basename(sfs))[i],
+                            sfs[i],
+                            "--force"
+                        )
+                    return(prokka_com)
+                }
+            ) %>% 
+            unlist
+        prokka_file <- 
+            sprintf("%s/prokka_coms.txt", prokka_dir_temp)
+        
+        prokka_out <- 
+            list(
+                file = prokka_file,
+                comms = prokka_coms
+            )
+        return(prokka_out)
+    }
+
+
+
+
+
+
+prokka_accs <- 
+    clustered_genomes_ss$accessions
+
+
+prokka_dir %>% list.files
+
+prokka_dir_temp <- 
+    "../data/prokka_temp_ch2"
+pd3 <- 
+    sprintf(
+        "../data/prokka3/%s",
+        species_name
+    )
+
+pd4 <- 
+    sprintf(
+        "../data/prokka4/%s",
+        species_name
+    )
+
+if (!dir.exists(prokka_dir_temp)){dir.create(prokka_dir_temp, recursive = T)}
+
+
+if (!dir.exists(pd4)){dir.create(pd4, recursive = T)}
+list.files(sync_dir)
+
+
+pbmclapply(
+    1:length(prok_com$comms),
+    function(i){
+        system(prok_com$comms[i])
+    }, mc.cores = 2
+)
+
+prok_com <- 
+    annotate_fna2(
+        species_name = 
+            species_name,
+        sync_dir = 
+            sync_dir, 
+        prokka_dir = 
+            prokka_dir_temp, 
+        accessions = 
+            accessions
+    )
+
+most_related %in% accessions
+
+accessions %in% 
+  sub(
+    ".txt",
+    "",
+    list.files(sync_dir)
+    ) %>% all
+  
+
+
+list.files("processing/sync/Gamma/Salmonella_enterica/"
+           )
+```
+
+```{bash}
+parsnp  -p 6 \
+    -r processing/sync/Gamma/Salmonella_enterica/NZ_CP039441.1.txt \
+    -c \
+    -d processing/sync/Gamma/Salmonella_enterica/ \
+    -o processing/snp_temp/Gamma/Salmonella_enterica
+```
+
+
+### enrichment plots
+```{r}
+
+parsnp  -p 6 \
+    -r processing/sync/Gamma/Salmonella_enterica/NZ_CP039441.1.txt \
+    -c \
+    -d processing/sync/Gamma/Salmonella_enterica/ \
+    -o processing/snp_temp/Gamma/Salmonella_enterica
+
+```
+
+
+
