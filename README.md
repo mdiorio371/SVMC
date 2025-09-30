@@ -38,7 +38,7 @@ A confidence score is provided based on the three methods for locating the OriC:
 
 assembly_dir <- "path/to/assembly"
 
-# Load and analyze assemblies
+# Load species assemblies and locate markers for the origin of replication
 load_assemblies(species_name, assembly_dir, n = 20)
 locate_ori(assembly_dir)
 
