@@ -10,9 +10,7 @@ classes (indels, duplications, translocations, inversions, and sub-structural
 inversions), and identifies lineage-defining motifs using a cohesion-based
 score validated against MASH distance clustering.
 
-> **Status: experimental (v0.1.0).** The package installs and the functions
-> run, but it is early research software. See *Known limitations* below before
-> relying on it.
+> **Status: experimental (v0.1.0).**
 
 ## Installation
 
