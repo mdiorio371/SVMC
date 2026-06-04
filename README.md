@@ -1,6 +1,6 @@
 # SVMC
 
-**Structural Variation Motif Cohesion for Bacterial Genomes**
+**Structural Variation Mapping and Characterization for Bacterial Genomes**
 
 SVMC is a pipeline and analysis framework for identifying, classifying, and
 validating large-scale structural variation (SV) in complete bacterial genome
