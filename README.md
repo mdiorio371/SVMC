@@ -78,14 +78,7 @@ lineage-defining tail in practice.
 
 ## Known limitations
 
-- **`oriC_scores_v2()` is not implemented.** `locate_OriC()` calls it to merge
-  dnaA-box density and GC-skew into multi-marker OriC scores; it is currently a
-  stub that errors with an explanatory message. Recreate it, or supply OriC
-  coordinates directly, before using `locate_OriC()`.
-- **Function-level documentation is incomplete.** Only the cohesion functions
-  carry roxygen help pages so far; `man/` pages for the rest are pending.
-- **DoriC helpers (`R/doric.R`) are not yet written.**
-- Analysis is designed for complete (closed) bacterial assemblies.
+- Analysis is designed for complete (closed) bacterial assemblies with >80% sequence similarity.
 
 ## License
 
