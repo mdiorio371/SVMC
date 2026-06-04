@@ -1,0 +1,59 @@
+Package: SVMC
+Type: Package
+Title: Structural Variation Motif Cohesion for Bacterial Genomes
+Version: 0.1.0
+Authors@R: c(
+    person("Matthew", "D'Iorio", email = "matthew.diorio@mail.mcgill.ca",
+           role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0001-5306-8832")))
+Description: A pipeline and analysis framework for identifying, classifying,
+    and validating large-scale structural variation in complete bacterial
+    genome assemblies. SVMC orients genomes to OriC using multi-marker
+    scoring (dnaA, DnaA-box density, GC-skew), aligns genomes with MUMmer,
+    classifies five SV classes (indels, duplications, translocations,
+    inversions, sub-structural inversions), and identifies lineage-defining
+    motifs using a cohesion-based scoring approach validated against MASH
+    distance clustering.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends:
+    R (>= 4.1.0)
+Imports:
+    dplyr,
+    tidyr,
+    tibble,
+    stringr,
+    purrr,
+    forcats,
+    ggplot2,
+    igraph,
+    mclust,
+    pracma,
+    data.table,
+    ape,
+    Biostrings,
+    IRanges,
+    GenomicRanges,
+    S4Vectors,
+    GenomeInfoDb,
+    BiocGenerics,
+    rtracklayer,
+    RColorBrewer,
+    pbmcapply,
+    fastmatch,
+    stats,
+    utils
+Suggests:
+    devtools,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+SystemRequirements: MUMmer (nucmer/delta-filter), Mash; Prokka (optional, for
+    annotation)
+VignetteBuilder: knitr
+URL: https://github.com/yourusername/SVMC
+BugReports: https://github.com/yourusername/SVMC/issues
+Config/testthat/edition: 3

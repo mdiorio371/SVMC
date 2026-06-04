@@ -1,0 +1,28 @@
+# R session / history
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Ruserdata
+.Renviron
+
+# RStudio
+.Rproj.user/
+
+# Build artifacts
+*.tar.gz
+*.Rcheck/
+..Rcheck/
+
+# Generated docs site
+docs/
+
+# Vignette outputs
+vignettes/*.html
+vignettes/*.pdf
+*_cache/
+/cache/
+
+# OS cruft
+.DS_Store
+Thumbs.db
