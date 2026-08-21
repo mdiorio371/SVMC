@@ -69,7 +69,6 @@ svmc_cohesion <- function(motif_uid, M_all, dist_matrix) {
   1 - (mean_within / mean_overall)
 }
 
-
 #' Score every motif in a carrier matrix
 #'
 #' Convenience wrapper that applies [svmc_cohesion()] to every motif (column)

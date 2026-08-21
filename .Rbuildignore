@@ -5,3 +5,7 @@
 ^docs$
 ^_pkgdown\.yml$
 ^README\.Rmd$
+^MERGE_REPORT\.md$
+^CONSOLIDATION_REPORT\.md$
+^R_prev$
+^files\.zip$
