@@ -26,3 +26,5 @@ vignettes/*.pdf
 # OS cruft
 .DS_Store
 Thumbs.db
+R_backup/
+R_backup_incomplete/
