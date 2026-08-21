@@ -7,14 +7,10 @@ structural variation in complete bacterial genome assemblies.
 
 ```r
 # install.packages("devtools")
-devtools::install_github("YOURUSERNAME/SVMC")
+devtools::install_github("mdiorio371/SVMC")
 ```
 
-Or load locally during development:
 
-```r
-devtools::load_all("path/to/SVMC")
-```
 
 ## Pipeline overview
 
