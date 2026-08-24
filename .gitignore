@@ -28,3 +28,14 @@ vignettes/*.pdf
 Thumbs.db
 R_backup/
 R_backup_incomplete/
+# working files, not part of the package
+*.zip
+*.png
+*.svg
+*.tsv
+/reproduce_salmonella_scores.R
+/salmonella_result_figure.R
+/make_example_data.R
+/mds_*.png
+/salmonella_*.png
+/salmonella_*.svg

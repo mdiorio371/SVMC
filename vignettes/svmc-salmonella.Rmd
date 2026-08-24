@@ -1,0 +1,168 @@
+---
+title: "What SVMC finds: mutually exclusive inversions predict Salmonella serovars"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{What SVMC finds: mutually exclusive inversions predict Salmonella serovars}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
+                      fig.width = 7, fig.height = 5, dpi = 150)
+```
+
+## The question
+
+Bacterial chromosomes undergo large-scale structural rearrangements -- most
+prominently, inversions spanning hundreds of kilobases to megabases. A natural
+hypothesis is that such large inversions might mark distinct sublineages of a
+species. **SVMC** (Structural Variant Mapping and Characterization) was built to
+test this directly: it calls structural variants from complete genome
+assemblies, groups recurrent ones into motifs, and asks which -- if any -- are
+lineage-defining.
+
+The answer, worked through below on *Salmonella enterica*, is more specific than
+the original hypothesis. Size and recurrence do **not** predict lineage
+association. A purely structural property -- **mutual exclusivity** -- does.
+
+```{r libs, message=FALSE}
+library(SVMC)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r load-data}
+ex <- readRDS(system.file("extdata", "salmonella_example.rds", package = "SVMC"))
+M       <- ex$presence     # genomes x focal inversions (presence/absence)
+serovar <- ex$serovar      # qid, serotype (independent SeqSero2 calls)
+mds     <- ex$mds          # qid, MDS1, MDS2, state
+ord_pct <- ex$ord_pct
+ex$focal_meta
+```
+
+## Step 1 — A catalog of recurrent inversions
+
+SVMC calls structural variants per genome and groups recurrent ones into
+motifs. Here we work with five focal inversions from the *Salmonella* cohort,
+ranging from 0.55 to 2.26 Mbp. Each is carried by tens to hundreds of genomes.
+
+```{r catalog}
+tibble(
+  motif      = ex$focal_meta$label,
+  size_mbp   = ex$focal_meta$size_mbp,
+  n_carriers = colSums(M > 0)[ex$focal_meta$motif_uid]
+) %>% arrange(desc(n_carriers))
+```
+
+Nothing here yet says which of these define lineages. Size and recurrence vary,
+but the largest inversion (2.26 Mbp) is not the most common, and recurrence
+alone does not tell us whether an inversion tracks a clade.
+
+## Step 2 — The structural criterion: mutual exclusivity
+
+SVMC partitions inversions by **co-occurrence**, computed from the presence
+matrix alone -- no lineage or serovar information is used. Two inversions are
+*mutually exclusive* when essentially no genome carries both; an inversion is
+*co-occurring* when it shares carriers with another.
+
+```{r exclusivity}
+excl <- svmc_inversion_exclusivity(M)
+excl
+```
+
+Two inversions fall out as **exclusive** (they share almost no carriers with any
+other), and the rest as **co-occurring**. Critically, the three inversions we
+will show to be lineage-defining are pairwise mutually exclusive:
+
+```{r are-exclusive}
+primary <- ex$focal_meta$motif_uid[ex$focal_meta$expected == "exclusive"]
+chk <- svmc_are_mutually_exclusive(M, primary)
+chk$mutually_exclusive     # TRUE: no genome carries more than one
+chk$n_multiple             # 0
+```
+
+This partition is unsupervised and structural. Whatever it predicts about
+biology is therefore a genuine finding, not a restatement of how the events
+were chosen.
+
+## Step 3 — Do the exclusive states predict serovar?
+
+Now we bring in **independent** data: SeqSero2 serovar calls. For each exclusive
+state we compute precision (do carriers belong to one serovar?) and recall (does
+the state capture that serovar?).
+
+```{r validation}
+state_map <- c(
+  "MOTIF|Structural_rearrangement|1"  = "A",   # 0.86 Mbp
+  "MOTIF|Structural_rearrangement|16" = "B",   # 0.55 Mbp
+  "MOTIF|Structural_rearrangement|19" = "C"    # 1.53 Mbp
+)
+
+lineage_map <- list(
+  "Typhi"        = list(state = "B",
+                        serovars = "Typhi"),
+  "D1 serogroup" = list(state = "A",
+                        serovars = c("Enteritidis","Dublin",
+                                     "Gallinarum or Enteritidis","Berta")),
+  "Infantis"     = list(state = "C",
+                        serovars = "Infantis")
+)
+
+svmc_state_serovar_validation(M, serovar, state_map, lineage_map)
+```
+
+Each exclusive state maps to a distinct serovar with high precision. The
+variation in *recall* is itself informative: the Infantis inversion is perfectly
+precise but low-recall -- it marks a distinct **sublineage** of Infantis rather
+than the whole serovar.
+
+The co-occurring inversions are not shown here because they do not define a
+state of their own: their carriers are largely inherited from co-occurrence with
+an exclusive event, and once that is accounted for their residual signal
+scatters across unrelated serovars.
+
+## Step 4 — The same partition, visible in genomic space
+
+Finally, the exclusive states occupy distinct territories in an ordination of
+genome-wide similarity -- a third, independent view of the same partition.
+
+```{r mds-figure, fig.width=7, fig.height=5.5}
+state_pal <- c("0.86 Mbp Inversion" = "#2A9D8F",
+               "0.55 Mbp Inversion" = "#E63946",
+               "1.53 Mbp Inversion" = "#8338EC")
+
+fig <- mds %>% filter(state %in% names(state_pal))
+
+ggplot() +
+  geom_point(data = mds %>% filter(!state %in% names(state_pal)),
+             aes(MDS1, MDS2), color = "grey88", size = 0.7) +
+  geom_point(data = fig, aes(MDS1, MDS2, fill = state),
+             shape = 21, color = "white", stroke = 0.4, size = 2.4) +
+  scale_fill_manual(values = state_pal, name = "Exclusive state") +
+  labs(x = sprintf("MDS1 (%.1f%%)", ord_pct["MDS1"]),
+       y = sprintf("MDS2 (%.1f%%)", ord_pct["MDS2"])) +
+  theme_classic(base_size = 12)
+```
+
+The three mutually exclusive inversions form separate clusters; the background
+(grey) and the co-occurring passengers do not carve out territories of their
+own.
+
+## What SVMC found
+
+Putting the four steps together:
+
+1. **Catalog** — the cohort carries several recurrent large inversions.
+2. **Structural partition** — some are mutually exclusive, some co-occur
+   (computed blind to lineage).
+3. **Independent validation** — the exclusive inversions each predict a distinct
+   serovar (72--100% precision); the co-occurring ones do not.
+4. **Genomic confirmation** — the exclusive states separate cleanly in an
+   ordination of genome similarity.
+
+**Mutual exclusivity, not size or recurrence, distinguishes lineage-defining
+structural variants.** The mechanistic question this raises -- why some
+inversions are exclusive (plausibly, because they are alternative orientations
+of the same contested genomic region) -- is a direction for future work, and one
+SVMC's breakpoint annotations are positioned to address.
